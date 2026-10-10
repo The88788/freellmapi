@@ -1,4 +1,5 @@
 import { nextMonthResetAt } from '../services/key-budget.js';
+import { PacingError } from '../services/provider-pacing-core.js';
 // One shared provider retry/fallback loop for every OpenAI-, Responses- and
 // Anthropic-shaped chat surface (routes/proxy.ts legacy /completions and
 // /chat/completions, routes/responses.ts, routes/anthropic.ts). Each surface
@@ -1134,6 +1135,27 @@ function classifyRoutingDiagLine(line: string): RoutingDiagClass {
 }
 
 export function routingExhaustionBody(routeErr: any): ExhaustionBody {
+  if (routeErr instanceof PacingError) {
+    const overloaded = routeErr.code === 'queue_overloaded' || routeErr.code === 'queue_stopped'
+      || routeErr.code === 'pacing_store_error';
+    const description: Record<string, string> = {
+      queue_overloaded: 'The provider pacing queue is full. Retry later.',
+      queue_stopped: 'Provider pacing is stopping; no upstream request started.',
+      pacing_store_error: 'Provider pacing state is unavailable; no upstream request started.',
+      rate_limit_exceeded: 'The request exceeded the configured provider pacing wait deadline.',
+      quota_too_large: 'The request exceeds the configured per-minute token budget.',
+      client_cancelled: 'The client cancelled the queued request.',
+      invalid_policy: 'The provider pacing configuration is invalid.',
+    };
+    return {
+      kind: overloaded ? 'unavailable' : 'rate_limit',
+      status: routeErr.status,
+      type: overloaded ? 'service_unavailable' : 'rate_limit_error',
+      code: routeErr.code,
+      ...(routeErr.retryAtMs != null ? { retryAtMs: routeErr.retryAtMs } : {}),
+      message: description[routeErr.code] ?? 'Provider pacing rejected the request.',
+    };
+  }
   const diag: string[] = Array.isArray(routeErr?.diagnostics) ? routeErr.diagnostics : [];
   const message: string = routeErr?.message ?? 'No model available to route this request';
   const classes = diag.map(classifyRoutingDiagLine);
