@@ -38,6 +38,7 @@ import * as keyMonthlyUsage from '../migrations/20260914_000001_key_monthly_usag
 import * as quotaSnapshotFreshness from '../migrations/20260915_000001_quota_snapshot_freshness.js';
 import * as requestModelAttribution from '../migrations/20260913_000001_request_model_attribution.js';
 import * as customEndpointGroupLabel from '../migrations/20260930_000001_custom_endpoint_group_label.js';
+import * as providerPacing from '../migrations/20261011_000001_provider_pacing.js';
 
 export interface MigrationModule {
   up(db: Db): void;
@@ -88,6 +89,7 @@ export const REQUEST_MODEL_ATTRIBUTION_FILENAME = '20260913_000001_request_model
 export const CUSTOM_ENDPOINT_GROUP_LABEL_FILENAME = '20260930_000001_custom_endpoint_group_label.ts';
 export const KEY_MONTHLY_USAGE_FILENAME = '20260914_000001_key_monthly_usage.ts';
 export const QUOTA_SNAPSHOT_FRESHNESS_FILENAME = '20260915_000001_quota_snapshot_freshness.ts';
+export const PROVIDER_PACING_FILENAME = '20261011_000001_provider_pacing.ts';
 
 export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: LEGACY_BASELINE_FILENAME, module: legacyBaseline },
@@ -129,4 +131,5 @@ export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: KEY_MONTHLY_USAGE_FILENAME, module: keyMonthlyUsage },
   { filename: QUOTA_SNAPSHOT_FRESHNESS_FILENAME, module: quotaSnapshotFreshness },
   { filename: CUSTOM_ENDPOINT_GROUP_LABEL_FILENAME, module: customEndpointGroupLabel },
+  { filename: PROVIDER_PACING_FILENAME, module: providerPacing },
 ];
