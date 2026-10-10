@@ -1197,9 +1197,18 @@ function persistCooldown(
       INSERT INTO rate_limit_cooldowns (platform, model_id, key_id, expires_at_ms, source, set_at_ms)
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(platform, model_id, key_id)
-      DO UPDATE SET expires_at_ms = excluded.expires_at_ms,
-                    source = excluded.source,
-                    set_at_ms = excluded.set_at_ms
+      DO UPDATE SET expires_at_ms =
+                      CASE WHEN rate_limit_cooldowns.source IN ('authoritative', 'credit', 'tier')
+                       AND rate_limit_cooldowns.expires_at_ms > excluded.expires_at_ms
+                        THEN rate_limit_cooldowns.expires_at_ms ELSE excluded.expires_at_ms END,
+                    source =
+                      CASE WHEN rate_limit_cooldowns.source IN ('authoritative', 'credit', 'tier')
+                       AND rate_limit_cooldowns.expires_at_ms > excluded.expires_at_ms
+                        THEN rate_limit_cooldowns.source ELSE excluded.source END,
+                    set_at_ms =
+                      CASE WHEN rate_limit_cooldowns.source IN ('authoritative', 'credit', 'tier')
+                       AND rate_limit_cooldowns.expires_at_ms > excluded.expires_at_ms
+                        THEN rate_limit_cooldowns.set_at_ms ELSE excluded.set_at_ms END
     `).run(platform, modelId, keyId, expiresAtMs, source, setAtMs);
   });
 }
@@ -1248,8 +1257,11 @@ export function setCooldown(
   const key = `${platform}:${modelId}:${keyId}:cooldown`;
   const now = Date.now();
   const expiresAtMs = now + durationMs;
-  cooldowns.set(key, expiresAtMs);
+  // Preserve an existing authoritative/credit/tier deadline if a later,
+  // shorter heuristic benched the same model-key.
   persistCooldown(platform, modelId, keyId, expiresAtMs, source, now);
+  const effective = persistedCooldownExpiry(platform, modelId, keyId);
+  cooldowns.set(key, Math.max(cooldowns.get(key) ?? 0, effective ?? expiresAtMs));
 }
 
 export function isOnCooldown(platform: string, modelId: string, keyId: number): boolean {
