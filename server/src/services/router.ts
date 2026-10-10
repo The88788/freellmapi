@@ -234,6 +234,8 @@ export interface RouteResult {
    * rather than destroy the error being propagated.
    */
   release?: () => void;
+  /** Queue delay only, never counted toward the upstream fallback hedge budget. */
+  pacingWaitedMs?: number;
 }
 
 // ── Routing token estimate: cap the reserved OUTPUT, not the full max_tokens ──
