@@ -64,6 +64,8 @@ interface Lease {
   keyId: number;
   tokens: number;
   createdAt: number;
+  /** Opt-in: release in fallback finally, not by the 2-minute stale lease sweep. */
+  protectedWhileActive?: boolean;
 }
 
 const leases = new Map<number, Lease>();
@@ -78,7 +80,7 @@ const LEASE_MAX_AGE_MS = 2 * MINUTE;
 function pruneLeases(now: number): void {
   if (leases.size === 0) return;
   for (const [id, lease] of leases) {
-    if (now - lease.createdAt > LEASE_MAX_AGE_MS) leases.delete(id);
+    if (!lease.protectedWhileActive && now - lease.createdAt > LEASE_MAX_AGE_MS) leases.delete(id);
   }
 }
 
@@ -130,10 +132,11 @@ export function acquireLease(
   keyId: number,
   tokens: number,
   now = Date.now(),
+  protectedWhileActive = false,
 ): number {
   pruneLeases(now);
   const id = nextLeaseId++;
-  leases.set(id, { platform, modelId, keyId, tokens, createdAt: now });
+  leases.set(id, { platform, modelId, keyId, tokens, createdAt: now, protectedWhileActive });
   return id;
 }
 
