@@ -57,6 +57,12 @@ export interface PacingRequest {
   clientId: string;
   estimatedTokens: number;
   signal?: AbortSignal;
+  /**
+   * Optional read-only readiness check against already-existing limiter gates.
+   * This is NOT permission to dispatch; routeRequest(commit) must revalidate.
+   * Deadline null means wake on legacy lease release or queue timeout.
+   */
+  readiness?: () => { ready: boolean; readyAtMs: number | null };
 }
 
 export interface PacingClock {
@@ -299,12 +305,17 @@ export class ProviderPacingCore {
 
   /** Synchronous admission: no await, no partial reservation on rejection. */
   private admit(
-    buckets: Bucket[], estimatedTokens: number, queuedAtMs: number, fairnessWaiter?: Waiter,
+    buckets: Bucket[], estimatedTokens: number, queuedAtMs: number,
+    fairnessWaiter?: Waiter,
+    readiness?: PacingRequest['readiness'],
   ): PacingGrant | null {
     const now = this.clock.now();
     // FIFO for EACH applicable quota bucket. One waiter can belong to many buckets.
     if (buckets.some(b => b.pending.length > 0 && b.pending[0] !== fairnessWaiter)) return null;
     if (this.available(buckets, estimatedTokens, now) > now) return null;
+    // Do not reserve our own scheduler tokens/start before the legacy
+    // limiter is also ready. A release event or the next timestamp wakes us.
+    if (readiness && !readiness().ready) return null;
     const changes = buckets
       .filter(b => b.rule.limits.minStartIntervalMs !== undefined)
       .map(b => ({ bucketKey: b.key, nextEligibleAtMs: now + b.rule.limits.minStartIntervalMs! }));
@@ -370,7 +381,7 @@ export class ProviderPacingCore {
       startedAtMs: now, waitedMs: 0, policyIds: [], release() {},
     });
     try {
-      const grant = this.admit(buckets, request.estimatedTokens, now);
+      const grant = this.admit(buckets, request.estimatedTokens, now, undefined, request.readiness);
       if (grant) return Promise.resolve(grant);
       // Validate impossible TPM before queuing, even if another waiter is ahead.
       this.available(buckets, request.estimatedTokens, now);
@@ -428,7 +439,10 @@ export class ProviderPacingCore {
         continue;
       }
       try {
-        const grant = this.admit(waiter.buckets, waiter.request.estimatedTokens, waiter.queuedAtMs, waiter);
+        const grant = this.admit(
+          waiter.buckets, waiter.request.estimatedTokens, waiter.queuedAtMs,
+          waiter, waiter.request.readiness,
+        );
         if (grant) {
           this.removeWaiter(waiter);
           waiter.resolve(grant);
@@ -455,6 +469,14 @@ export class ProviderPacingCore {
       try {
         const earliest = this.available(w.buckets, w.request.estimatedTokens, now);
         if (earliest > now && Number.isFinite(earliest)) wakeAt = Math.min(wakeAt, earliest);
+        // Also honor legacy RPM/TPM/cooldown availability. A lease with an
+        // unknown completion time will wake us through notifyWaiters().
+        const eligibility = w.request.readiness?.();
+        if (eligibility && !eligibility.ready
+          && eligibility.readyAtMs !== null
+          && eligibility.readyAtMs > now) {
+          wakeAt = Math.min(wakeAt, eligibility.readyAtMs);
+        }
         // Admission that's ready at time now is triggered by drain/release,
         // not a 0ms recurring timer.
       } catch { /* drain will surface the error on the next wake */ }
@@ -462,6 +484,9 @@ export class ProviderPacingCore {
     this.timer = this.clock.setTimeout(() => { this.timer = undefined; this.drain(); },
       Math.max(1, Math.min(MAX_TIMER, wakeAt - now)));
   }
+
+  /** Called by the legacy limiter on lease release, not by a polling loop. */
+  notifyWaiters(): void { this.drain(); }
 
   /** Cancels undispached waiters, does not abort already dispatched attempts. */
   shutdown(): void {
