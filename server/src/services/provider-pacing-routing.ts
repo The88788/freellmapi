@@ -8,16 +8,25 @@
  * Never hold a RouteResult/legacy lease while awaiting a pacing grant.
  */
 import { routeRequest, type RouteResult, type PacingRouteOptions } from './router.js';
+import { subscribeLeaseRelease } from './ratelimit.js';
 import {
   ProviderPacingCore, PacingError, type PacingIdentity,
 } from './provider-pacing-core.js';
 
 type RouteArgs = Parameters<typeof routeRequest>;
 let activeScheduler: ProviderPacingCore | undefined;
+let unsubscribeLeaseRelease: (() => void) | undefined;
 
 /** Installs only a fully initialized, single-writer scheduler. Not called by default. */
 export function installProviderPacingScheduler(scheduler: ProviderPacingCore | undefined): void {
+  unsubscribeLeaseRelease?.();
+  unsubscribeLeaseRelease = undefined;
   activeScheduler = scheduler;
+  if (scheduler) {
+    // A stream ending unlocks an existing legacy concurrency/TPM gate.
+    // Wake its waiters immediately rather than polling or guessing an ETA.
+    unsubscribeLeaseRelease = subscribeLeaseRelease(() => scheduler.notifyWaiters());
+  }
 }
 
 export function isProviderPacingInstalled(): boolean {
@@ -94,6 +103,22 @@ async function admittedRoute(
       clientId,
       estimatedTokens: args[0] ?? 1000,
       signal,
+      readiness: () => {
+        // Called at wake-up, before scheduler consumes any token/start slot.
+        // A key disabled during waiting is never returned as "ready".
+        try {
+          const live = select(args, skipKeys, {
+            mode: 'preview', modelDbId: preview.modelDbId, keyId: preview.keyId,
+          });
+          if (!sameCandidate(preview, live)) return { ready: false, readyAtMs: null };
+          return {
+            ready: !live.pacingTemporarilyBlocked,
+            readyAtMs: live.pacingReadyAtMs ?? null,
+          };
+        } catch {
+          return { ready: false, readyAtMs: null };
+        }
+      },
     });
     totalQueueWaitMs += grant.waitedMs;
     try {
