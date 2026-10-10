@@ -142,8 +142,22 @@ export function acquireLease(
 
 /** Release a lease. Idempotent, so a double release from overlapping cleanup
  *  paths is harmless. */
+const leaseReleaseSubscribers = new Set<() => void>();
+
+/**
+ * Local event seam for a scheduler waiting on existing legacy concurrency
+ * limits. Subscribe once per scheduler, not once per request.
+ */
+export function subscribeLeaseRelease(listener: () => void): () => void {
+  leaseReleaseSubscribers.add(listener);
+  return () => leaseReleaseSubscribers.delete(listener);
+}
+
 export function releaseLease(leaseId: number): void {
-  leases.delete(leaseId);
+  if (!leases.delete(leaseId)) return;
+  for (const listener of leaseReleaseSubscribers) {
+    try { listener(); } catch { /* never throw from cleanup */ }
+  }
 }
 
 /** Test seam: drop all leases. */
@@ -1529,4 +1543,104 @@ export function learnLimitFromError(modelDbId: number, err: { message?: string }
     ).run(parsed.limit, modelDbId, parsed.limit),
   );
   return result && result.changes > 0 ? parsed : null;
+}
+
+/**
+ * Read-only analysis of legacy short-lived gates. Day/month budgets are NOT
+ * included: their rejection must remain a hard denial in router.ts.
+ *
+ * readyAtMs is a conservative timer hint, not a reservation or permission:
+ * admission always rechecks the original gates synchronously.
+ * When a provisional active lease is the blocker, the next time is unknown
+ * and the scheduler must subscribe to subscribeLeaseRelease().
+ */
+export interface TemporaryPacingReadiness {
+  ready: boolean;
+  readyAtMs: number | null;
+  waitingOnLease: boolean;
+}
+
+function pacedWindowExpiry(
+  platform: string, modelId: string | null, keyId: number,
+  kind: 'request' | 'tokens', cap: number, incoming: number,
+  provisional: number, now: number,
+): number | null {
+  const rows = withDb(db => db.prepare(`
+    SELECT created_at_ms AS atMs, tokens
+      FROM rate_limit_usage
+     WHERE platform = ? AND key_id = ? AND kind = ?
+       AND (? IS NULL OR model_id = ?)
+       AND created_at_ms > ?
+     ORDER BY created_at_ms ASC
+  `).all(platform, keyId, kind, modelId, modelId, now - MINUTE) as
+    { atMs: number; tokens: number }[]);
+  if (!rows) return null; // storage issue, never guess an early dispatch
+  let used = provisional + incoming + rows.reduce((n, row) =>
+    n + (kind === 'tokens' ? row.tokens : 1), 0);
+  if (used <= cap) return now;
+  for (const row of rows) {
+    used -= kind === 'tokens' ? row.tokens : 1;
+    if (used <= cap) return row.atMs + MINUTE;
+  }
+  // The remaining blocker is an in-flight provisional lease.
+  return null;
+}
+
+export function getTemporaryPacingReadiness(
+  platform: string, modelId: string, keyId: number,
+  estimatedTokens: number,
+  limits: { rpm: number | null; tpm: number | null },
+  now = Date.now(),
+): TemporaryPacingReadiness {
+  let blocked = false;
+  let readyAtMs: number | null = now;
+  let waitingOnLease = false;
+
+  const pending = (at: number | null) => {
+    blocked = true;
+    if (at === null) {
+      waitingOnLease = true;
+    } else {
+      readyAtMs = Math.max(readyAtMs ?? now, at);
+    }
+  };
+
+  if (isOnCooldown(platform, modelId, keyId)) {
+    const key = `${platform}:${modelId}:${keyId}:cooldown`;
+    const expiry = persistedCooldownExpiry(platform, modelId, keyId)
+      ?? cooldowns.get(key) ?? null;
+    pending(expiry);
+  }
+
+  if (!canUseKeyConcurrency(platform, keyId, now)) pending(null);
+
+  if (!canUseProviderMinute(platform, keyId, now)) {
+    const cap = getProviderMinuteRequestCap(platform);
+    if (cap !== null) pending(pacedWindowExpiry(
+      platform, null, keyId, 'request', cap, 1,
+      provisionalProviderRequests(platform, keyId, now), now,
+    ));
+  }
+
+  if (limits.rpm !== null
+    && !canMakeRequest(platform, modelId, keyId, {
+      rpm: limits.rpm, rpd: null, tpm: null, tpd: null,
+    })) {
+    pending(pacedWindowExpiry(
+      platform, modelId, keyId, 'request', limits.rpm, 1,
+      provisionalRequests(platform, modelId, keyId, now), now,
+    ));
+  }
+
+  if (limits.tpm !== null
+    && !canUseTokens(platform, modelId, keyId, estimatedTokens, {
+      tpm: limits.tpm, tpd: null,
+    })) {
+    pending(pacedWindowExpiry(
+      platform, modelId, keyId, 'tokens', limits.tpm, estimatedTokens,
+      provisionalTokens(platform, modelId, keyId, now), now,
+    ));
+  }
+
+  return { ready: !blocked, readyAtMs: blocked ? readyAtMs : now, waitingOnLease };
 }
