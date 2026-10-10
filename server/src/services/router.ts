@@ -1519,7 +1519,18 @@ function cachedDecrypt(keyId: number, ct: string, iv: string, authTag: string): 
   return plain;
 }
 
-function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: Set<string>, diag?: string[]): RouteResult | null {
+/**
+ * Optional preview and exact-candidate commit for the pacing bridge.
+ * Preview performs no key/monthly reservation and must never be dispatched.
+ * Commit checks the candidate again after queue admission.
+ */
+export interface PacingRouteOptions {
+  mode: 'preview' | 'commit';
+  modelDbId?: number;
+  keyId?: number;
+}
+
+function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: Set<string>, diag?: string[], pacing?: PacingRouteOptions): RouteResult | null {
   const db = getDb();
   const label = `${entry.platform}/${entry.model_id}`;
 
@@ -1592,6 +1603,8 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     const key = ranked ? ranked[attempt] : keys[idx % keys.length];
     idx++;
 
+    if (pacing?.mode === 'commit' && key.id !== pacing.keyId) continue;
+
     if (endpointKeyIds && !endpointKeyIds.has(key.id)) { note('custom-key-mismatch'); continue; }
 
     const skipId = `${entry.platform}:${entry.model_id}:${key.id}`;
@@ -1616,14 +1629,16 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     // fallback exhaustion path rather than blocking here.
     if (!checkMonthlyBudget(key.id, estimatedTokens).allowed) { note('monthly-budget-cap'); continue; }
 
-    let decryptedKey: string;
-    try {
-      decryptedKey = cachedDecrypt(key.id, key.encrypted_key, key.iv, key.auth_tag);
-    } catch {
-      db.prepare("UPDATE api_keys SET status = 'error', last_checked_at = datetime('now') WHERE id = ?")
-        .run(key.id);
-      note('decrypt-error');
-      continue;
+    let decryptedKey = '';
+    if (pacing?.mode !== 'preview') {
+      try {
+        decryptedKey = cachedDecrypt(key.id, key.encrypted_key, key.iv, key.auth_tag);
+      } catch {
+        db.prepare("UPDATE api_keys SET status = 'error', last_checked_at = datetime('now') WHERE id = ?")
+          .run(key.id);
+        note('decrypt-error');
+        continue;
+      }
     }
 
     const resolvedProvider = entry.platform === 'custom'
@@ -1631,13 +1646,17 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       : provider;
     if (!resolvedProvider) { note('no-resolved-provider'); continue; }
 
-    roundRobinIndex.set(rrKey, idx);
-    // Taken only once the key has cleared every gate and is definitely being
-    // returned, so a rejected candidate never consumes concurrency budget.
-    const proxyUrl = decryptProxyUrl(key);
-    const budget = reserveMonthlyBudget(key.id, estimatedTokens);
-    if (!budget.allowed) { note('monthly-budget-cap'); continue; }
-    const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens);
+    if (pacing?.mode !== 'preview') roundRobinIndex.set(rrKey, idx);
+    // Preview is side-effect free for quota/accounting; commit takes the original
+    // budget and lease only after a scheduler grant was received.
+    const proxyUrl = pacing?.mode === 'preview' ? '' : decryptProxyUrl(key);
+    let release: (() => void) | undefined;
+    if (pacing?.mode !== 'preview') {
+      const budget = reserveMonthlyBudget(key.id, estimatedTokens);
+      if (!budget.allowed) { note('monthly-budget-cap'); continue; }
+      const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens);
+      release = () => { releaseLease(leaseId); budget.release(); };
+    }
     return {
       provider: resolvedProvider,
       modelId: entry.model_id,
@@ -1653,13 +1672,13 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       endpointScope: entry.endpoint_scope ?? '',
       rpdLimit: limits.rpd,
       tpdLimit: limits.tpd,
-      release: () => { releaseLease(leaseId); budget.release(); },
+      release,
     };
   }
 
   // No usable key for this model. Advance the round-robin index anyway so we
   // don't get stuck re-trying the same exhausted key first next time.
-  roundRobinIndex.set(rrKey, idx);
+  if (pacing?.mode !== 'preview') roundRobinIndex.set(rrKey, idx);
   const summary = Object.entries(skipTally).map(([r, n]) => `${r}:${n}`).join(', ') || 'no usable key';
   diag?.push(`${label}: ${keys.length} key(s) — ${summary}`);
   return null;
@@ -2076,7 +2095,7 @@ export function resolveFusionCandidate(modelId: string): FusionCandidate | null 
   return null;
 }
 
-export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number, requireVision = false, requireTools = false, skipModels?: Set<number>, prefetchedChain?: ChainRow[], requireStructured = false, skipPlatforms?: Set<string>, exactOutputReserve = 0, task?: 'code' | 'chat'): RouteResult {
+export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number, requireVision = false, requireTools = false, skipModels?: Set<number>, prefetchedChain?: ChainRow[], requireStructured = false, skipPlatforms?: Set<string>, exactOutputReserve = 0, task?: 'code' | 'chat', pacing?: PacingRouteOptions): RouteResult {
   const db = getDb();
 
   const strategy = getRoutingStrategy();
@@ -2217,7 +2236,14 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
   }
   servingChain.push(...marginDeferred, ...toolDeferred);
 
-  for (const entry of servingChain) {
+  for (const originalEntry of servingChain) {
+    if (pacing?.mode === 'commit' && originalEntry.model_db_id !== pacing.modelDbId) continue;
+    // Rehydrate committed candidates after queue sleep: saved prefetched chains
+    // must not resurrect an operator-disabled or deleted catalog row.
+    const entry = pacing?.mode === 'commit'
+      ? getModelChainRow(db, originalEntry.model_db_id)
+      : originalEntry;
+    if (!entry) continue;
     const label = `${entry.platform}/${entry.model_id}`;
     // Models the caller has ruled out for this request — e.g. a 404
     // "model removed upstream" already seen this request: trying the same
@@ -2285,7 +2311,7 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
     // first usable key's RouteResult, or null when the model has no key that
     // can serve right now — in which case we fall through to the next model in
     // the sorted chain for THIS request (no explicit penalty needed).
-    const route = selectKeyForModel(entry, estimatedTokens, skipKeys, diag);
+    const route = selectKeyForModel(entry, estimatedTokens, skipKeys, diag, pacing);
     if (route) return route;
   }
 
