@@ -14,6 +14,7 @@ import {
   type ChainRow,
   type RouteResult,
 } from '../services/router.js';
+import { schedulePacedRoute } from '../services/provider-pacing-routing.js';
 import {
   getModelGroups,
   isUnifyEnabled,
@@ -236,7 +237,7 @@ export async function runInboundChat(
       // routing estimate on the next attempt so low-tpm / small-window models
       // are skipped by the existing gates in router.ts instead of re-firing.
       const routingTotal = fallbackRoutingTokens(state, estimatedTotal, outputReserve);
-      return routeRequest(
+      return schedulePacedRoute(req.ip ?? 'unknown', clientAbort.signal, 
         routingTotal,
         state.skipKeys.size ? state.skipKeys : undefined,
         pin.preferredModel,
