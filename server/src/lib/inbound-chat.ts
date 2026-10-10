@@ -7,7 +7,6 @@ import type {
 } from '@freellmapi/shared/types.js';
 import { getDb } from '../db/index.js';
 import {
-  routeRequest,
   resolveStickyPreference,
   routingReserveTokens,
   resolveModelGroupCandidates,
