@@ -1283,7 +1283,7 @@ export interface FallbackHooks {
    * Throws the router's RouteError when the pool is exhausted before any
    * upstream is tried (caught by the loop → onRoutingExhausted).
    */
-  route(attempt: number): RouteResult;
+  route(attempt: number): RouteResult | Promise<RouteResult>;
 
   /**
    * Run one attempt against the chosen route. Return 'done' on success or
@@ -1356,6 +1356,10 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
   const maxRetries = hooks.maxRetries ?? FALLBACK_MAX_RETRIES;
   const baseBudgetMs = hooks.timeBudgetMs ?? getFallbackTimeBudgetMs();
   const startedAt = Date.now();
+  // Queue waits are not upstream/fallback failures and must not burn the
+  // provider hedge budget. A separate global request deadline remains required
+  // before the scheduler is enabled in production.
+  let accumulatedQueueWaitMs = 0;
   const attempts: AttemptRecord[] = hooks.attemptLog ?? [];
   const keyOrdinals = new Map<string, number>();
   const keyOrdinal = (route: RouteResult): number => {
@@ -1403,11 +1407,15 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
 
     let route: RouteResult;
     try {
-      route = hooks.route(attempt);
+      const selection = hooks.route(attempt);
+      // Preserve legacy synchronous selection when feature is OFF; only
+      // await an actual asynchronous queue admission.
+      route = selection instanceof Promise ? await selection : selection;
+      accumulatedQueueWaitMs += route.pacingWaitedMs ?? 0;
     } catch (routeErr) {
       // With no candidate to supply an endpoint-specific allowance, retain
       // the original timeout diagnosis when the base budget is already spent.
-      if (attempt > 1 && baseBudgetMs > 0 && Date.now() - startedAt >= baseBudgetMs) {
+      if (attempt > 1 && baseBudgetMs > 0 && Date.now() - startedAt - accumulatedQueueWaitMs >= baseBudgetMs) {
         hooks.onExhausted(
           exhaustedRetryError(lastError, maxRetries, { attempts, timedOut: true, budgetMs: baseBudgetMs }),
           { attempts, timedOut: true },
@@ -1436,7 +1444,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
       : baseBudgetMs;
     // Attempt 0 and the first retry remain exempt (#751). Routing reserves a
     // lease, so even a candidate rejected here must pass through finally.
-    if (attempt > 1 && budgetMs > 0 && Date.now() - startedAt >= budgetMs) {
+    if (attempt > 1 && budgetMs > 0 && Date.now() - startedAt - accumulatedQueueWaitMs >= budgetMs) {
       hooks.onExhausted(
         exhaustedRetryError(lastError, maxRetries, { attempts, timedOut: true, budgetMs }),
         { attempts, timedOut: true },
@@ -1489,7 +1497,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
       }
     };
     if (attempt > 1 && budgetMs > 0 && hooks.abortInFlight) {
-      const remaining = budgetMs - (Date.now() - startedAt);
+      const remaining = budgetMs - (Date.now() - startedAt - accumulatedQueueWaitMs);
       if (remaining > 0) {
         hedgeTimer = setTimeout(() => {
           console.log(`[FallbackLoop] retry time budget (${budgetMs}ms) expired with no first byte on ${route.platform}/${route.modelId} — aborting stalled upstream`);
