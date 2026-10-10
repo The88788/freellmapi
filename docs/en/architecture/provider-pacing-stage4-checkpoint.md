@@ -14,8 +14,8 @@
 
 ## Verified in the isolated local test environment
 
-- 13 Stage 1 core fake-clock tests: **13 PASS** using Node 22 type stripping.
-- 5 *new* core readiness tests: **5 PASS**, `tsc --noEmit --strict` on the modified standalone core: **PASS**.
+- The 13 original core tests and five new readiness checks rerun **together against the same modified Stage 4 core**: **18 PASS / 0 FAIL**, using Node 22 type stripping and a local deterministic test harness.
+- `tsc --noEmit --strict` on that modified standalone core: **PASS**.
 - 2 isolated SQLite sliding-window SQL tests: **2 PASS**.
 - Repository-wide Vitest tests, TypeScript server/client build, pre/post-commit real SSE, and GitHub CI status: **not confirmed**. New repository tests were added but have not been executed as part of the repository suite.
 - No real provider requests were sent; no current quota or key data accessed.
