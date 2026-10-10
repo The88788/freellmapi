@@ -1447,7 +1447,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
       if (hooks.clientGone?.()) return;
       // With no candidate to supply an endpoint-specific allowance, retain
       // the original timeout diagnosis when the base budget is already spent.
-      if (attempt > 1 && baseBudgetMs > 0 && Date.now() - startedAt - accumulatedQueueWaitMs >= baseBudgetMs) {
+      if (!(routeErr instanceof PacingError) && attempt > 1 && baseBudgetMs > 0 && Date.now() - startedAt - accumulatedQueueWaitMs >= baseBudgetMs) {
         hooks.onExhausted(
           exhaustedRetryError(lastError, maxRetries, { attempts, timedOut: true, budgetMs: baseBudgetMs }),
           { attempts, timedOut: true },
