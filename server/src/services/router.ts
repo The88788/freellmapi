@@ -1656,7 +1656,7 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     if (pacing?.mode !== 'preview') {
       const budget = reserveMonthlyBudget(key.id, estimatedTokens);
       if (!budget.allowed) { note('monthly-budget-cap'); continue; }
-      const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens);
+      const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens, Date.now(), pacing?.mode === 'commit');
       release = () => { releaseLease(leaseId); budget.release(); };
     }
     return {
