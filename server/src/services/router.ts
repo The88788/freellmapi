@@ -239,6 +239,8 @@ export interface RouteResult {
   pacingWaitedMs?: number;
   /** Preview-only: caller must wait for legacy RPM/TPM/cooldown/lease before commit. */
   pacingTemporarilyBlocked?: boolean;
+  /** Preview-only hint for when the legacy limiter might permit this key. */
+  pacingReadyAtMs?: number | null;
 }
 
 // ── Routing token estimate: cap the reserved OUTPUT, not the full max_tokens ──
@@ -1618,6 +1620,7 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     if (skipKeys?.has(skipId)) { note('already-failed-this-request'); continue; }
 
     let temporarilyBlocked = false;
+    let pacingReadyAtMs: number | null = null;
     if (pacing?.mode === 'preview') {
       // Hard daily limits are not queueable within a short request deadline.
       // Keep provider/key/account budget enforcement even for a deferred key.
@@ -1631,9 +1634,11 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       if (!canUseProviderTokens(entry.platform, key.id, entry.model_id, estimatedTokens)) {
         note('provider-daily-token-cap'); continue;
       }
-      temporarilyBlocked = !getTemporaryPacingReadiness(
+      const readiness = getTemporaryPacingReadiness(
         entry.platform, entry.model_id, key.id, estimatedTokens, limits,
-      ).ready;
+      );
+      temporarilyBlocked = !readiness.ready;
+      if (temporarilyBlocked) pacingReadyAtMs = readiness.readyAtMs;
     } else {
       // Original synchronous legacy path must remain unchanged with flag OFF.
       if (isOnCooldown(entry.platform, entry.model_id, key.id)) { note('cooldown'); continue; }
@@ -1694,7 +1699,7 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       rpdLimit: limits.rpd,
       tpdLimit: limits.tpd,
       release,
-      ...(temporarilyBlocked ? { pacingTemporarilyBlocked: true } : {}),
+      ...(temporarilyBlocked ? { pacingTemporarilyBlocked: true, pacingReadyAtMs } : {}),
     };
     if (temporarilyBlocked) {
       deferredPreview ??= chosen;
