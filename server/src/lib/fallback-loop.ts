@@ -1412,7 +1412,17 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
       // await an actual asynchronous queue admission.
       route = selection instanceof Promise ? await selection : selection;
       accumulatedQueueWaitMs += route.pacingWaitedMs ?? 0;
+      // A queued grant can resolve just as the client disconnects. The
+      // router may already have acquired a lease: release it before any
+      // upstream attempt or response write.
+      if (hooks.clientGone?.()) {
+        route.release?.();
+        return;
+      }
     } catch (routeErr) {
+      // A disconnect during queue sleep is NOT a provider failure and there
+      // is no live HTTP socket on which to render an exhaustion body.
+      if (hooks.clientGone?.()) return;
       // With no candidate to supply an endpoint-specific allowance, retain
       // the original timeout diagnosis when the base budget is already spent.
       if (attempt > 1 && baseBudgetMs > 0 && Date.now() - startedAt - accumulatedQueueWaitMs >= baseBudgetMs) {
