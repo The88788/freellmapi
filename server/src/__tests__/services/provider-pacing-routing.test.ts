@@ -6,6 +6,7 @@ const routing = vi.hoisted(() => ({
   activeLeases: 0,
   released: 0,
   commitFails: false,
+  legacyReady: true,
 }));
 
 vi.mock('../../services/router.js', () => ({
@@ -17,6 +18,9 @@ vi.mock('../../services/router.js', () => ({
     if (skipKeys?.has('pollinations:muse:glimmer:9')) throw new Error('candidate exhausted');
     if (mode === 'commit' && routing.commitFails) throw new Error('candidate unavailable');
     const route = {
+      ...(mode === 'preview' && !routing.legacyReady
+        ? { pacingTemporarilyBlocked: true, pacingReadyAtMs: null }
+        : {}),
       platform: 'pollinations', modelId: 'muse:glimmer', modelDbId: 21,
       keyId: 9, endpointScope: 'api:v1', displayName: 'Muse',
       contextWindow: 64000, rpdLimit: null, tpdLimit: null, keyLabel: null,
@@ -84,6 +88,7 @@ describe('pacing routing bridge (opt in)', () => {
     routing.activeLeases = 0;
     routing.released = 0;
     routing.commitFails = false;
+    routing.legacyReady = true;
     clock = new Clock();
     scheduler = makeScheduler(clock);
     installProviderPacingScheduler(scheduler);
@@ -108,7 +113,8 @@ describe('pacing routing bridge (opt in)', () => {
     const first = schedulePacedRoute('Harness', undefined, 500);
     const second = schedulePacedRoute('Codex', undefined, 500);
     const a = await first;
-    expect(routing.calls).toEqual(['preview', 'preview', 'commit']);
+    expect(routing.calls.filter(x => x === 'commit')).toHaveLength(1);
+    expect(routing.calls.filter(x => x === 'preview').length).toBeGreaterThanOrEqual(2);
     expect(routing.activeLeases).toBe(1);
     expect(scheduler.status().pending).toBe(1);
     clock.tick(64999);
@@ -116,12 +122,29 @@ describe('pacing routing bridge (opt in)', () => {
     expect(routing.activeLeases).toBe(1);
     clock.tick(65000);
     const b = await second;
-    expect(routing.calls).toEqual(['preview', 'preview', 'commit', 'commit']);
+    expect(routing.calls.filter(x => x === 'commit')).toHaveLength(2);
     expect(b.pacingWaitedMs).toBe(65000);
     expect(routing.activeLeases).toBe(2);
     a.release?.(); a.release?.(); b.release?.();
     expect(routing.activeLeases).toBe(0);
     expect(routing.released).toBe(2);
+  });
+
+  it('waits for legacy RPM/concurrency readiness without taking a lease', async () => {
+    routing.legacyReady = false;
+    const pending = schedulePacedRoute('Harness', undefined, 500);
+    expect(scheduler.status().pending).toBe(1);
+    expect(scheduler.status().inflight).toBe(0);
+    expect(routing.calls.includes('commit')).toBe(false);
+    clock.tick(15_000);
+    expect(routing.activeLeases).toBe(0);
+    routing.legacyReady = true;
+    scheduler.notifyWaiters();
+    const route = await pending;
+    expect(route.pacingWaitedMs).toBe(15_000);
+    expect(routing.activeLeases).toBe(1);
+    route.release?.();
+    expect(routing.activeLeases).toBe(0);
   });
 
   it('aborting a queued client cannot reserve another lease', async () => {
