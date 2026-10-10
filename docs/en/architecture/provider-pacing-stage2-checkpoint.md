@@ -31,11 +31,12 @@
 1. **Stage 3**: authenticated admin API/UI, validated operator policies, transactional `PacingStartStore` SQLite migrations, settings revision and real Pollinations model/account mapping. The scheduler is intentionally **not installed at startup**; runtime traffic is unchanged without an explicit initialized scheduler.
 2. **Routing semantics**: currently waits on the preview winner. Auto-routing must prefer another allowed *ready* candidate before unnecessary queue wait, while respecting pinned model/group semantics and paid fallback policy.
 3. **Cooldown awareness**: classify temporarily cooled-down candidates separately from permanently unavailable models; wait only when deadline is within the queue budget, without overwriting provider-authoritative Retry-After. Current preview can exhaust if all candidates are on cooldown; this is not yet FR-09 complete.
-4. **Dynamic settings**: handle profile changes, model/key updates, policy revision, account/pool ownership, cancellation, fairness and fresh key scope after each wake with explicit tests.
-5. **Budget/deadline**: define a bounded global end-to-end HTTP request deadline independent of fallback budget, and test Caddy/client timeouts of waits up to 65–180 sec.
-6. **Coverage**: identify and either integrate or explicitly document bypasses: Fusion, Embeddings, Media, Rerank, validations, cooldown probes; account-wide quotas can otherwise be exceeded by those paths.
-7. **Integration tests**: all 22 acceptance cases, load/race/long-stream/restart/DB error, Windows Harness and Codex clients with a real isolated server DB, existing baseline tests.
-8. **Production provenance**: user-authorized read-only confirmation of VPS tree and one-process topology, backup, dry run and isolated port; **deployment requires separate permission**.
+4. **Existing limiter queueability**: read-only preview still uses legacy RPM/TPM, cooldown and per-key concurrency gates. If every key is temporarily blocked, it may throw before a waiter is registered. Add a read-only 'temporarily blocked until' disposition, then preserve hard gates at commit; test full-key concurrency and expiring RPM/TPM/cooldown windows end to end.
+5. **Dynamic settings**: handle profile changes, model/key updates, policy revision, account/pool ownership, cancellation, fairness and fresh key scope after each wake with explicit tests.
+6. **Budget/deadline**: define a bounded global end-to-end HTTP request deadline independent of fallback budget, and test Caddy/client timeouts of waits up to 65–180 sec.
+7. **Coverage**: identify and either integrate or explicitly document bypasses: Fusion, Embeddings, Media, Rerank, validations, cooldown probes; account-wide quotas can otherwise be exceeded by those paths.
+8. **Integration tests**: all 22 acceptance cases, load/race/long-stream/restart/DB error, Windows Harness and Codex clients with a real isolated server DB, existing baseline tests.
+9. **Production provenance**: user-authorized read-only confirmation of VPS tree and one-process topology, backup, dry run and isolated port; **deployment requires separate permission**.
 
 ## Safety invariants
 
