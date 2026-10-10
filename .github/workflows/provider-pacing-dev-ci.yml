@@ -1,0 +1,32 @@
+name: Provider Pacing development checks
+
+# Branch-scoped verification only. Does not deploy or modify the VPS.
+on:
+  push:
+    branches:
+      - feature/provider-pacing-queue
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Migration roundtrip
+        run: npm run test:migrations
+      - name: Server tests
+        run: npm test
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
