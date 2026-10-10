@@ -9,7 +9,7 @@
  */
 import { routeRequest, type RouteResult, type PacingRouteOptions } from './router.js';
 import {
-  ProviderPacingCore, PacingError, type PacingIdentity, type PacingGrant,
+  ProviderPacingCore, PacingError, type PacingIdentity,
 } from './provider-pacing-core.js';
 
 type RouteArgs = Parameters<typeof routeRequest>;
