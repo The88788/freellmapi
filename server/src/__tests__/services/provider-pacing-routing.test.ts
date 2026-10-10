@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderPacingCore, PacingError } from '../../services/provider-pacing-core.js';
+import { ProviderPacingCore } from '../../services/provider-pacing-core.js';
 
 const routing = vi.hoisted(() => ({
   calls: [] as string[],
