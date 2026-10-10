@@ -27,7 +27,8 @@ export function isProviderPacingInstalled(): boolean {
 function select(args: RouteArgs, skipped: Set<string>, pacing: PacingRouteOptions): RouteResult {
   const copy: unknown[] = [...args];
   copy[1] = skipped.size ? skipped : undefined;
-  copy[12] = pacing;
+  // routeRequest(...): pacing is argument #12 (zero-based index 11).
+  copy[11] = pacing;
   return routeRequest(...(copy as RouteArgs));
 }
 
