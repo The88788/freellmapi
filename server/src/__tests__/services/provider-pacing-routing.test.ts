@@ -10,7 +10,7 @@ const routing = vi.hoisted(() => ({
 
 vi.mock('../../services/router.js', () => ({
   routeRequest: (...args: unknown[]) => {
-    const pacing = args[12] as { mode?: 'preview' | 'commit'; keyId?: number } | undefined;
+    const pacing = args[11] as { mode?: 'preview' | 'commit'; keyId?: number } | undefined;
     const mode = pacing?.mode ?? 'legacy';
     routing.calls.push(mode);
     const skipKeys = args[1] as Set<string> | undefined;
