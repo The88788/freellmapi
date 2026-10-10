@@ -13,6 +13,8 @@ vi.mock('../../services/router.js', () => ({
     const pacing = args[12] as { mode?: 'preview' | 'commit'; keyId?: number } | undefined;
     const mode = pacing?.mode ?? 'legacy';
     routing.calls.push(mode);
+    const skipKeys = args[1] as Set<string> | undefined;
+    if (skipKeys?.has('pollinations:muse:glimmer:9')) throw new Error('candidate exhausted');
     if (mode === 'commit' && routing.commitFails) throw new Error('candidate unavailable');
     const route = {
       platform: 'pollinations', modelId: 'muse:glimmer', modelDbId: 21,
@@ -106,7 +108,7 @@ describe('pacing routing bridge (opt in)', () => {
     const first = schedulePacedRoute('Harness', undefined, 500);
     const second = schedulePacedRoute('Codex', undefined, 500);
     const a = await first;
-    expect(routing.calls).toEqual(['preview', 'commit', 'preview']);
+    expect(routing.calls).toEqual(['preview', 'preview', 'commit']);
     expect(routing.activeLeases).toBe(1);
     expect(scheduler.status().pending).toBe(1);
     clock.tick(64999);
@@ -114,7 +116,7 @@ describe('pacing routing bridge (opt in)', () => {
     expect(routing.activeLeases).toBe(1);
     clock.tick(65000);
     const b = await second;
-    expect(routing.calls).toEqual(['preview', 'commit', 'preview', 'commit']);
+    expect(routing.calls).toEqual(['preview', 'preview', 'commit', 'commit']);
     expect(b.pacingWaitedMs).toBe(65000);
     expect(routing.activeLeases).toBe(2);
     a.release?.(); a.release?.(); b.release?.();
