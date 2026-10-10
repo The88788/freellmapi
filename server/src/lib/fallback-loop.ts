@@ -1454,9 +1454,11 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
         );
         return;
       }
-      const exhaustion = lastError
-        ? exhaustedRetryError(lastError, undefined, { attempts })
-        : routingExhaustionBody(routeErr);
+      const exhaustion = routeErr instanceof PacingError
+        ? routingExhaustionBody(routeErr)
+        : lastError
+          ? exhaustedRetryError(lastError, undefined, { attempts })
+          : routingExhaustionBody(routeErr);
       // Zero attempts ran: log the router's per-candidate disposition, the only
       // record of why the pool was empty. With prior attempts the trail in the
       // exhaustion body already explains the failure.
