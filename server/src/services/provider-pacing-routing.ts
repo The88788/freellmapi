@@ -24,6 +24,19 @@ export function isProviderPacingInstalled(): boolean {
   return activeScheduler !== undefined;
 }
 
+/** Sanitized statistics: no credentials, request content or client identifiers. */
+export function providerPacingRuntimeStatus() {
+  const scheduler = activeScheduler;
+  return {
+    installed: scheduler !== undefined,
+    enabled: scheduler?.config.enabled ?? false,
+    status: scheduler?.status() ?? { pending: 0, inflight: 0, stopped: true, buckets: [] },
+    counters: scheduler?.counters() ?? {
+      enqueued: 0, admitted: 0, cancelled: 0, timedOut: 0, overloaded: 0,
+    },
+  };
+}
+
 function select(args: RouteArgs, skipped: Set<string>, pacing: PacingRouteOptions): RouteResult {
   const copy: unknown[] = [...args];
   copy[1] = skipped.size ? skipped : undefined;
