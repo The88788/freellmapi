@@ -68,6 +68,7 @@ async function admittedRoute(
   args: RouteArgs,
 ): Promise<RouteResult> {
   const skipKeys = new Set(args[1] ?? []);
+  let totalQueueWaitMs = 0;
   // Bound a route that changes while waiting. A changed key/model is retried
   // with a fresh preview; it never inherits the prior grant's identity.
   for (let revision = 0; revision < 4; revision++) {
@@ -80,6 +81,7 @@ async function admittedRoute(
       estimatedTokens: args[0] ?? 1000,
       signal,
     });
+    totalQueueWaitMs += grant.waitedMs;
     try {
       if (signal?.aborted) throw new PacingError('client_cancelled', 499);
       const committed = select(args, skipKeys, {
@@ -100,7 +102,7 @@ async function admittedRoute(
         released = true;
         try { originalRelease?.(); } finally { grant.release(); }
       };
-      committed.pacingWaitedMs = grant.waitedMs;
+      committed.pacingWaitedMs = totalQueueWaitMs;
       return committed;
     } catch (err) {
       grant.release(0);
