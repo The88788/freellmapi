@@ -28,6 +28,12 @@ import { MCP_ENABLED_SETTING, isMcpServerEnabled } from './mcp.js';
 import { z } from 'zod';
 import { getAppVersion } from '../lib/app-version.js';
 import {
+  readProviderPacingConfig,
+  saveProviderPacingConfig,
+  parseProviderPacingConfig,
+  PacingConfigurationError,
+} from '../services/provider-pacing-store.js';
+import {
   UNIFIED_MAX_TOKENS_SETTING,
   UNIFIED_MAX_TOKENS_AUTO,
   unifiedMaxTokensCap,
@@ -600,4 +606,56 @@ settingsRouter.post('/proxy/test', async (req: Request, res: Response) => {
       : getFetchRelayToken(),
   });
   res.json(result);
+});
+
+
+// ── Provider Pacing & Queue (Stage 3: draft configuration only) ────────────────
+// These endpoints inherit the dashboard's requireAuth middleware from app.ts.
+// They do not install/activate the scheduler. Enabling remains deliberately
+// rejected until integrated E2E and single-writer rollout gates are complete.
+settingsRouter.get('/provider-pacing', (_req: Request, res: Response) => {
+  try {
+    res.json({ ...readProviderPacingConfig(), runtimeEnabled: false });
+  } catch {
+    res.status(503).json({ error: { code: 'pacing_store_error', message: 'Pacing configuration unavailable' } });
+  }
+});
+
+settingsRouter.post('/provider-pacing/validate', (req: Request, res: Response) => {
+  try {
+    const config = parseProviderPacingConfig(req.body?.config);
+    res.json({
+      valid: true, config,
+      activatable: false,
+      reason: 'Integration and deployment safety checks have not completed',
+    });
+  } catch {
+    res.status(400).json({ valid: false, error: {
+      code: 'invalid_policy', message: 'Provider pacing configuration is invalid',
+    } });
+  }
+});
+
+settingsRouter.put('/provider-pacing', (req: Request, res: Response) => {
+  const expectedRevision = req.body?.revision;
+  try {
+    const saved = saveProviderPacingConfig(expectedRevision, req.body?.config);
+    res.json({ ...saved, runtimeEnabled: false });
+  } catch (err) {
+    if (err instanceof PacingConfigurationError) {
+      const status = err.code === 'invalid_policy' ? 400 : 409;
+      res.status(status).json({ error: {
+        code: err.code,
+        message: err.code === 'revision_conflict'
+          ? 'Pacing settings changed in another session. Reload the revision.'
+          : err.code === 'pacing_not_ready'
+            ? 'Pacing cannot be activated until the integration safety gate is complete.'
+            : 'Provider pacing configuration is invalid',
+      } });
+      return;
+    }
+    res.status(503).json({ error: {
+      code: 'pacing_store_error', message: 'Unable to save provider pacing configuration',
+    } });
+  }
 });
