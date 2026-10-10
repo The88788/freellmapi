@@ -14,6 +14,7 @@ import {
   releaseLease,
   getSoonestCooldownExpiry,
   modelWindowUsedFraction,
+  getTemporaryPacingReadiness,
 } from './ratelimit.js';
 import {
   BANDIT_PRESETS, DEFAULT_STRATEGY, type RoutingStrategy, type RoutingWeights,
@@ -236,6 +237,8 @@ export interface RouteResult {
   release?: () => void;
   /** Queue delay only, never counted toward the upstream fallback hedge budget. */
   pacingWaitedMs?: number;
+  /** Preview-only: caller must wait for legacy RPM/TPM/cooldown/lease before commit. */
+  pacingTemporarilyBlocked?: boolean;
 }
 
 // ── Routing token estimate: cap the reserved OUTPUT, not the full max_tokens ──
@@ -1600,31 +1603,47 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
   const endpointKeyIds = entry.platform === 'custom' && entry.key_id != null
     ? customEndpointKeyIds(db, entry.key_id)
     : null;
+  let deferredPreview: RouteResult | null = null;
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const key = ranked ? ranked[attempt] : keys[idx % keys.length];
     idx++;
 
-    if (pacing?.mode === 'commit' && key.id !== pacing.keyId) continue;
+    if ((pacing?.mode === 'commit' || (pacing?.mode === 'preview' && pacing.keyId !== undefined))
+      && key.id !== pacing.keyId) continue;
 
     if (endpointKeyIds && !endpointKeyIds.has(key.id)) { note('custom-key-mismatch'); continue; }
 
     const skipId = `${entry.platform}:${entry.model_id}:${key.id}`;
     if (skipKeys?.has(skipId)) { note('already-failed-this-request'); continue; }
 
-    if (isOnCooldown(entry.platform, entry.model_id, key.id)) { note('cooldown'); continue; }
-    if (!canUseProvider(entry.platform, key.id)) { note('provider-daily-cap'); continue; }
-    // Account-wide per-minute budget, checked before the per-model gates: a model
-    // with a NULL rpm_limit would otherwise sail past them and spend a budget its
-    // siblings share.
-    if (!canUseProviderMinute(entry.platform, key.id)) { note('provider-minute-cap'); continue; }
-    // Skip a key that already has its allowed requests in the air. Without this,
-    // parallel streams all pick the same key and 429 each other on providers that
-    // meter concurrency per credential.
-    if (!canUseKeyConcurrency(entry.platform, key.id)) { note('key-concurrency'); continue; }
-    if (!canMakeRequest(entry.platform, entry.model_id, key.id, limits)) { note('rpm/rpd-limit'); continue; }
-    if (!canUseTokens(entry.platform, entry.model_id, key.id, estimatedTokens, limits)) { note('tpm/tpd-limit'); continue; }
-    if (!canUseProviderTokens(entry.platform, key.id, entry.model_id, estimatedTokens)) { note('provider-daily-token-cap'); continue; }
+    let temporarilyBlocked = false;
+    if (pacing?.mode === 'preview') {
+      // Hard daily limits are not queueable within a short request deadline.
+      // Keep provider/key/account budget enforcement even for a deferred key.
+      if (!canUseProvider(entry.platform, key.id)) { note('provider-daily-cap'); continue; }
+      if (!canMakeRequest(entry.platform, entry.model_id, key.id,
+        { rpm: null, rpd: limits.rpd, tpm: null, tpd: null })) {
+        note('rpd-limit'); continue;
+      }
+      if (!canUseTokens(entry.platform, entry.model_id, key.id, estimatedTokens,
+        { tpm: null, tpd: limits.tpd })) { note('tpd-limit'); continue; }
+      if (!canUseProviderTokens(entry.platform, key.id, entry.model_id, estimatedTokens)) {
+        note('provider-daily-token-cap'); continue;
+      }
+      temporarilyBlocked = !getTemporaryPacingReadiness(
+        entry.platform, entry.model_id, key.id, estimatedTokens, limits,
+      ).ready;
+    } else {
+      // Original synchronous legacy path must remain unchanged with flag OFF.
+      if (isOnCooldown(entry.platform, entry.model_id, key.id)) { note('cooldown'); continue; }
+      if (!canUseProvider(entry.platform, key.id)) { note('provider-daily-cap'); continue; }
+      if (!canUseProviderMinute(entry.platform, key.id)) { note('provider-minute-cap'); continue; }
+      if (!canUseKeyConcurrency(entry.platform, key.id)) { note('key-concurrency'); continue; }
+      if (!canMakeRequest(entry.platform, entry.model_id, key.id, limits)) { note('rpm/rpd-limit'); continue; }
+      if (!canUseTokens(entry.platform, entry.model_id, key.id, estimatedTokens, limits)) { note('tpm/tpd-limit'); continue; }
+      if (!canUseProviderTokens(entry.platform, key.id, entry.model_id, estimatedTokens)) { note('provider-daily-token-cap'); continue; }
+    }
     // Monthly budget (#1158): a key whose request/token caps are spent for the
     // current UTC month is not a candidate — same skip semantics as the daily
     // gates above. The Retry-After (next-month boundary) surfaces through the
@@ -1659,7 +1678,7 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens, Date.now(), pacing?.mode === 'commit');
       release = () => { releaseLease(leaseId); budget.release(); };
     }
-    return {
+    const chosen: RouteResult = {
       provider: resolvedProvider,
       modelId: entry.model_id,
       modelDbId: entry.model_db_id,
@@ -1675,9 +1694,16 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       rpdLimit: limits.rpd,
       tpdLimit: limits.tpd,
       release,
+      ...(temporarilyBlocked ? { pacingTemporarilyBlocked: true } : {}),
     };
+    if (temporarilyBlocked) {
+      deferredPreview ??= chosen;
+      continue;
+    }
+    return chosen;
   }
 
+  if (deferredPreview) return deferredPreview;
   // No usable key for this model. Advance the round-robin index anyway so we
   // don't get stuck re-trying the same exhausted key first next time.
   if (pacing?.mode !== 'preview') roundRobinIndex.set(rrKey, idx);
@@ -2238,8 +2264,9 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
   }
   servingChain.push(...marginDeferred, ...toolDeferred);
 
+  let deferredPreview: RouteResult | null = null;
   for (const originalEntry of servingChain) {
-    if (pacing?.mode === 'commit' && originalEntry.model_db_id !== pacing.modelDbId) continue;
+    if (pacing?.modelDbId !== undefined && originalEntry.model_db_id !== pacing.modelDbId) continue;
     // Rehydrate committed candidates after queue sleep: saved prefetched chains
     // must not resurrect an operator-disabled or deleted catalog row.
     const entry = pacing?.mode === 'commit'
@@ -2314,8 +2341,13 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
     // can serve right now — in which case we fall through to the next model in
     // the sorted chain for THIS request (no explicit penalty needed).
     const route = selectKeyForModel(entry, estimatedTokens, skipKeys, diag, pacing);
+    if (route?.pacingTemporarilyBlocked) {
+      deferredPreview ??= route;
+      continue; // Prefer a ready alternate before waiting on the first model.
+    }
     if (route) return route;
   }
+  if (deferredPreview) return deferredPreview;
 
   // The aggregate keyless line rides in diagnostics but NOT in the summary's
   // route count: those models were never candidates for this request.
