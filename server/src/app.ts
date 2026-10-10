@@ -33,6 +33,7 @@ import { ollamaRouter } from './routes/ollama.js';
 import { urlTokenRouter } from './routes/url-tokens.js';
 import { updateRouter } from './routes/update.js';
 import { moderationRouter } from './routes/moderation.js';
+import { providerPacingRouter } from './routes/provider-pacing.js';
 import { requireAuth } from './middleware/requireAuth.js';
 import { createProxyRateLimiter, createAdminRateLimiter } from './middleware/rateLimit.js';
 
@@ -262,6 +263,7 @@ export function createApp(config?: Config) {
   app.use('/api/health', requireAuth, healthRouter);
   app.use('/api/free-tier', requireAuth, freeTierRouter);
   app.use('/api/settings', requireAuth, settingsRouter);
+  app.use('/api/provider-pacing', requireAuth, providerPacingRouter);
   app.use('/api/premium', requireAuth, premiumRouter);
   // Database dumps and restores. Dashboard-session gated: the dump files carry
   // encrypted provider keys and every routing setting, so the unified /v1 key
