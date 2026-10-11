@@ -77,9 +77,15 @@ export function effectiveProviderTimeout(
   platform: string, modelId: string | undefined,
   baseline: ProviderTimeoutSetting,
 ): EffectiveProviderTimeout {
-  validateTimeoutTarget(platform, modelId);
+  // Inference model names come from the catalog, not the dashboard. Never
+  // reject an otherwise valid existing request because its model label cannot
+  // be used as an operator override key. Just use the provider-level default.
+  const validModelKey = modelId !== undefined
+    && modelId.length >= 1 && modelId.length <= 300
+    && !/[\u0000-\u001f\u007f]/.test(modelId);
   const providerOverrideMs = readOverride(platformKey(platform));
-  const modelOverrideMs = modelId ? readOverride(modelKey(platform, modelId)) : null;
+  const modelOverrideMs = validModelKey
+    ? readOverride(modelKey(platform, modelId!)) : null;
   const effectiveMs = modelOverrideMs ?? providerOverrideMs ?? baseline.timeoutMs;
   return {
     ...baseline,
