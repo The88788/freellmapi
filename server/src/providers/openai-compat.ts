@@ -13,7 +13,7 @@ import { repairToolArguments, toolSchemaMap } from '../lib/tool-args.js';
 import { invalidToolCallReasons, isToolArgumentValidationEnabled } from '../lib/tool-validate.js';
 import { recordQuotaObservation, recordQuotaObservationsFromResponse, type QuotaObservationContext } from '../services/provider-quota.js';
 import type { QuotaMetric } from '@freellmapi/shared/types.js';
-import { providerTimeoutMs } from '../lib/provider-timeout.js';
+import { providerTimeoutSetting, streamStallTimeoutMs, type ProviderTimeoutSetting } from '../lib/provider-timeout.js';
 import { isAbortLikeError } from '../lib/error-classify.js';
 import { contentToString } from '../lib/content.js';
 import { bearerAuthHeader } from '../lib/credential.js';
@@ -93,6 +93,7 @@ export class OpenAICompatProvider extends BaseProvider {
    * non-streaming responses until generation completes, and reasoning models can
    * take >15s before first byte. Default 60000. */
   private readonly timeoutMs: number;
+  private readonly timeoutSetting: ProviderTimeoutSetting;
   /** NVIDIA NIM models reject any request that permits parallel tool calls with
    * `400 This model only supports single tool-calls at once!`. When set, pin
    * parallel_tool_calls to false whenever tools are in play. See issue #255. */
@@ -121,11 +122,38 @@ export class OpenAICompatProvider extends BaseProvider {
     this.extraHeaders = opts.extraHeaders ?? {};
     this.validateUrl = opts.validateUrl;
     // PROVIDER_TIMEOUT_<PLATFORM> wins over the registration default (#547).
-    this.timeoutMs = providerTimeoutMs(opts.platform, opts.timeoutMs ?? 60_000);
+    this.timeoutSetting = providerTimeoutSetting(opts.platform, opts.timeoutMs ?? 60_000);
+    this.timeoutMs = this.timeoutSetting.timeoutMs;
     this.keyless = opts.keyless ?? false;
     this.forceSingleToolCall = opts.forceSingleToolCall ?? false;
     this.forwardsPartial = opts.platform === 'custom' && isMoonshotEndpoint(opts.baseUrl);
     this.quotaProbe = opts.quotaProbe;
+  }
+
+  /**
+   * Admin-only, non-secret effective timeout snapshot. Chat uses a fixed
+   * constructor value; per-call CompletionOptions.timeoutMs can still override.
+   * SSE first-byte grace is max(chat, stall); stream stall is independent.
+   */
+  getTimeoutStatus(): ProviderTimeoutSetting & {
+    streamStallTimeoutMs: number;
+    firstByteTimeoutMs: number;
+    streamStallSource: 'provider_environment' | 'global_environment' | 'default';
+  } {
+    const stall = streamStallTimeoutMs(this.platform);
+    const platformEnv = `PROVIDER_STREAM_STALL_TIMEOUT_${this.platform.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+    const valid = (name: string) => {
+      const raw = process.env[name];
+      return raw !== undefined && raw.trim() !== ''
+        && Number.isInteger(Number(raw)) && Number(raw) >= 0;
+    };
+    return {
+      ...this.timeoutSetting,
+      streamStallTimeoutMs: stall,
+      firstByteTimeoutMs: this.timeoutMs <= 0 || stall <= 0 ? 0 : Math.max(this.timeoutMs, stall),
+      streamStallSource: valid(platformEnv) ? 'provider_environment'
+        : valid('PROVIDER_STREAM_STALL_TIMEOUT_MS') ? 'global_environment' : 'default',
+    };
   }
 
   /** Resolve the parallel_tool_calls flag to send upstream. For providers that
