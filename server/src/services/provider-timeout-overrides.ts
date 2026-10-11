@@ -22,7 +22,7 @@ export type ProviderTimeoutSource =
   | 'dashboard_provider'
   | 'dashboard_model';
 
-export interface EffectiveProviderTimeout extends ProviderTimeoutSetting {
+export interface EffectiveProviderTimeout extends Omit<ProviderTimeoutSetting, 'source'> {
   source: ProviderTimeoutSource;
   platform: string;
   modelId?: string;
