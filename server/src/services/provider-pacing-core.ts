@@ -238,6 +238,7 @@ export class ProviderPacingCore {
   private inflight = 0;
   private readonly metrics = {
     enqueued: 0, admitted: 0, cancelled: 0, timedOut: 0, overloaded: 0,
+    totalQueueWaitMs: 0, maxQueueWaitMs: 0,
   };
 
   constructor(
@@ -363,6 +364,8 @@ export class ProviderPacingCore {
     for (let i = 0; i < buckets.length; i++) buckets[i]!.usages.push(usages[i]!);
     this.inflight++;
     this.metrics.admitted++;
+    this.metrics.totalQueueWaitMs += Math.max(0, now - queuedAtMs);
+    this.metrics.maxQueueWaitMs = Math.max(this.metrics.maxQueueWaitMs, now - queuedAtMs);
     let released = false;
     return {
       startedAtMs: now,
