@@ -63,6 +63,14 @@ export interface PacingRequest {
    * Deadline null means wake on legacy lease release or queue timeout.
    */
   readiness?: () => { ready: boolean; readyAtMs: number | null };
+  /**
+   * Synchronous legacy-route admission. This callback must atomically
+   * revalidate the candidate and take the EXISTING key lease/month budget.
+   * It is invoked only after pacing + legacy readiness checks pass, and
+   * before we persist the next pacing start. No async code is allowed.
+   * rollback() must be idempotent; it runs if persisting the start fails.
+   */
+  onAdmit?: () => { resource: unknown; rollback(): void };
 }
 
 export interface PacingClock {
@@ -97,6 +105,8 @@ export interface PacingGrant {
   readonly startedAtMs: number;
   readonly waitedMs: number;
   readonly policyIds: readonly string[];
+  /** Optional payload acquired synchronously alongside pacing admission. */
+  readonly resource?: unknown;
   /** Exactly once. For unknown actual usage, keeps the safe estimate. */
   release(actualTokens?: number): void;
 }
@@ -308,6 +318,7 @@ export class ProviderPacingCore {
     buckets: Bucket[], estimatedTokens: number, queuedAtMs: number,
     fairnessWaiter?: Waiter,
     readiness?: PacingRequest['readiness'],
+    onAdmit?: PacingRequest['onAdmit'],
   ): PacingGrant | null {
     const now = this.clock.now();
     // FIFO for EACH applicable quota bucket. One waiter can belong to many buckets.
@@ -319,10 +330,16 @@ export class ProviderPacingCore {
     const changes = buckets
       .filter(b => b.rule.limits.minStartIntervalMs !== undefined)
       .map(b => ({ bucketKey: b.key, nextEligibleAtMs: now + b.rule.limits.minStartIntervalMs! }));
+    // Exact legacy commit and pacing start persistence share ONE synchronous
+    // admission turn: if the SQLite write fails, release the legacy budget
+    // and lease before any upstream byte can be sent.
+    let claimed: ReturnType<NonNullable<PacingRequest['onAdmit']>> | undefined;
+    if (onAdmit) claimed = onAdmit();
     try {
       // Fail-closed: do not dispatch if the durable reservation fails.
       if (changes.length) this.store?.commitStarts(changes);
     } catch {
+      try { claimed?.rollback(); } catch { /* preserve storage failure */ }
       throw new PacingError('pacing_store_error', 503);
     }
     for (const b of buckets) {
@@ -341,6 +358,7 @@ export class ProviderPacingCore {
       startedAtMs: now,
       waitedMs: Math.max(0, now - queuedAtMs),
       policyIds: buckets.map(b => b.rule.id),
+      ...(claimed ? { resource: claimed.resource } : {}),
       release: (actualTokens?: number) => {
         if (released) return;
         released = true;
@@ -377,11 +395,20 @@ export class ProviderPacingCore {
     });
     let buckets: Bucket[];
     try { buckets = this.matchingBuckets(request.identity); } catch (err) { return Promise.reject(err); }
-    if (buckets.length === 0) return Promise.resolve({
-      startedAtMs: now, waitedMs: 0, policyIds: [], release() {},
-    });
+    if (buckets.length === 0) {
+      try {
+        const claim = request.onAdmit?.();
+        return Promise.resolve({
+          startedAtMs: now, waitedMs: 0, policyIds: [],
+          ...(claim ? { resource: claim.resource } : {}),
+          release() {},
+        });
+      } catch (err) { return Promise.reject(err); }
+    }
     try {
-      const grant = this.admit(buckets, request.estimatedTokens, now, undefined, request.readiness);
+      const grant = this.admit(
+        buckets, request.estimatedTokens, now, undefined, request.readiness, request.onAdmit,
+      );
       if (grant) return Promise.resolve(grant);
       // Validate impossible TPM before queuing, even if another waiter is ahead.
       this.available(buckets, request.estimatedTokens, now);
@@ -441,7 +468,7 @@ export class ProviderPacingCore {
       try {
         const grant = this.admit(
           waiter.buckets, waiter.request.estimatedTokens, waiter.queuedAtMs,
-          waiter, waiter.request.readiness,
+          waiter, waiter.request.readiness, waiter.request.onAdmit,
         );
         if (grant) {
           this.removeWaiter(waiter);
