@@ -944,3 +944,65 @@ describe('runFallbackLoop: routing-exhaustion diagnostics belong to the loop', (
     }
   });
 });
+
+
+describe('Provider Pacing timeout/fallback FR-11 regression', () => {
+  it('65s scheduler wait does not consume the 45s upstream fallback budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: number[] = [];
+      const onExhausted = vi.fn();
+      const dispatch = vi.fn(async (_route: RouteResult, attempt: number) => {
+        calls.push(attempt);
+        if (attempt < 2) throw new Error('429 Too Many Requests');
+        return 'done' as const;
+      });
+      const loop = runFallbackLoop(hooksSkeleton({
+        maxRetries: 3,
+        timeBudgetMs: 45_000,
+        route: attempt => attempt === 0
+          ? new Promise(resolve => setTimeout(
+              () => resolve(fakeRoute({ pacingWaitedMs: 65_000 })), 65_000,
+            ))
+          : fakeRoute({ pacingWaitedMs: 0 }),
+        dispatch,
+        onExhausted,
+      }));
+      await vi.advanceTimersByTimeAsync(65_000);
+      await loop;
+      expect(calls).toEqual([0, 1, 2]);
+      expect(onExhausted).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a committed SSE attempt cannot trigger another fallback hop', async () => {
+    const dispatch = vi.fn(async () => 'committed' as const);
+    const route = vi.fn(() => fakeRoute());
+    const onExhausted = vi.fn();
+    await runFallbackLoop(hooksSkeleton({
+      maxRetries: 20, timeBudgetMs: 180_000,
+      route, dispatch, onExhausted,
+    }));
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(onExhausted).not.toHaveBeenCalled();
+  });
+
+  it('upstream timeout retries are bounded by maxRetries, independently of 429', async () => {
+    const dispatch = vi.fn(async () => {
+      throw new Error('The operation was aborted (pollinations, chat, 120s)');
+    });
+    const onExhausted = vi.fn();
+    await runFallbackLoop(hooksSkeleton({
+      maxRetries: 3,
+      timeBudgetMs: 0,
+      route: () => fakeRoute({ platform: 'pollinations' }),
+      dispatch, onExhausted,
+    }));
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    const exhaustion = onExhausted.mock.calls[0]?.[0];
+    expect(exhaustion).toMatchObject({
+      code: 'upstream_failed', reason: 'upstream_timeout',
+    });
+  });
+});
