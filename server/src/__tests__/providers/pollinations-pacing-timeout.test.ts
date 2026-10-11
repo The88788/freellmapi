@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PollinationsProvider } from '../../providers/pollinations.js';
 import { OpenAICompatProvider } from '../../providers/openai-compat.js';
 import { providerTimeoutSetting } from '../../lib/provider-timeout.js';
+import { ProviderPacingCore } from '../../services/provider-pacing-core.js';
 
 // All tests replace fetch: no real Pollinations, NVIDIA, Mistral or paid API.
 const MODEL = 'community/YoannDev90/muse-glimmer-30b:free';
@@ -100,19 +101,34 @@ describe('Pollinations 120s timeout, mock upstream, no network', () => {
     await rejected;
   });
 
-  it('65s queue admission delay does not start the 120s upstream timer early', async () => {
+  it('65s real scheduler queue wait does not consume the 120s upstream timer', async () => {
     process.env.PROVIDER_TIMEOUT_POLLINATIONS = '120000';
     const provider = new PollinationsProvider();
     delayedFetch(70_000);
-    let admitted: Promise<unknown> | undefined;
-    setTimeout(() => {
-      admitted = provider.chatCompletion('fake-key', messages, MODEL);
-    }, 65_000);
-    await vi.advanceTimersByTimeAsync(65_000);
-    expect(admitted).toBeDefined();
-    await vi.advanceTimersByTimeAsync(70_000);
-    const response = await admitted as Awaited<ReturnType<typeof provider.chatCompletion>>;
+    const scheduler = new ProviderPacingCore({
+      enabled: true, maxPendingGlobal: 10, maxPendingPerClient: 10,
+      rules: [{
+        id: 'pollinations65', enabled: true, scope: 'model-key',
+        match: { platform: 'pollinations', modelId: MODEL, keyId: 9 },
+        limits: { minStartIntervalMs: 65000 },
+        queue: { maxWaitMs: 180000, maxPendingPerBucket: 10 },
+      }],
+    });
+    const identity = { platform: 'pollinations', modelId: MODEL, keyId: 9 };
+    const first = await scheduler.schedule({ identity, estimatedTokens: 500, clientId: 'Harness' });
+    const pending = scheduler.schedule({ identity, estimatedTokens: 500, clientId: 'Codex' });
+    expect(scheduler.status().pending).toBe(1);
+    await vi.advanceTimersByTimeAsync(65000);
+    const second = await pending;
+    expect(second.waitedMs).toBe(65000);
+    // Only NOW does this outbound fetch acquire the 120s provider timeout.
+    const upstream = provider.chatCompletion('fake-key', messages, MODEL);
+    await vi.advanceTimersByTimeAsync(70000);
+    const response = await upstream;
     expect(response.choices[0]?.message?.content).toBe('ready');
+    first.release();
+    second.release();
+    scheduler.shutdown();
   });
 
   it('slow first SSE byte uses 120s grace, independent of 90s stream stall', async () => {
