@@ -22,7 +22,9 @@ export type ProviderTimeoutSource =
   | 'dashboard_provider'
   | 'dashboard_model';
 
-export interface EffectiveProviderTimeout extends Omit<ProviderTimeoutSetting, 'source'> {
+export interface EffectiveProviderTimeout extends Omit<ProviderTimeoutSetting, 'source' | 'restartRequiredToChange'> {
+  /** Editing a saved dashboard override needs no restart; changing .env does. */
+  restartRequiredToChange: boolean;
   source: ProviderTimeoutSource;
   platform: string;
   modelId?: string;
@@ -94,6 +96,7 @@ export function effectiveProviderTimeout(
     timeoutMs: effectiveMs,
     source: modelOverrideMs !== null ? 'dashboard_model'
       : providerOverrideMs !== null ? 'dashboard_provider' : baseline.source,
+    restartRequiredToChange: modelOverrideMs === null && providerOverrideMs === null,
     providerOverrideMs,
     modelOverrideMs,
   };
