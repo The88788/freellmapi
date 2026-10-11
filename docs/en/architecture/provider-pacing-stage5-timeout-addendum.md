@@ -40,6 +40,7 @@ This is evidence that the **gateway aborted a provider attempt after its 60-seco
 - `lib/provider-timeout.ts`: `providerTimeoutSetting()` exposes the effective timeout, built-in default, exact env key and source (`environment` vs `provider_default`), reusing existing parser and validation. No new provider timeout setting/database.
 - `providers/openai-compat.ts`: `getTimeoutStatus()` captures the **actual constructed** chat timeout and its source; also exposes current first-byte/stall budgets and stall source. Per-call timeout override remains untouched.
 - `routes/provider-pacing.ts`: existing authenticated queue diagnostics endpoint now displays Pollinations/NVIDIA/Mistral timeout snapshots. No new route.
+- `provider-pacing-core.ts` + `provider-pacing-routing.ts`: successful admissions now accumulate `totalQueueWaitMs` and `maxQueueWaitMs`, separate from existing fallback `request_attempts` upstream attempt durations. The Settings view shows queue mean/max; it does not claim in-flight upstream duration is a queue wait.
 - `client/components/provider-pacing-settings.tsx`: shows the snapshots in the **existing** Settings > LLM Queue section, with restart note. No new dashboard page.
 - `lib/error-classify.ts`: **diagnostic only** `requestTerminationReason()`, independent of existing retry classification, for `queue_timeout`, `upstream_timeout`, `first_byte_timeout`, `stream_stall`, `client_abort`, `rate_limit`, `fallback_exhausted`.
 - `lib/fallback-loop.ts`: existing OpenAI exhaustion `error.code` and HTTP statuses retained. Optional `error.reason` adds actionable cause to compatible error payloads; a queued timeout is not tagged as an upstream timeout, while the 60s Pollinations incident can be identified as `upstream_timeout`. No alteration to retry count, fallback sequencing, provider default timeouts or SSE protocol framing.
@@ -50,6 +51,7 @@ This is evidence that the **gateway aborted a provider attempt after its 60-seco
 - `server/src/__tests__/lib/pacing-timeout-reasons.test.ts` (4 cases): exact original Pollinations error classification, 429 vs stall/first-byte, client abort vs fallback, queue error mapping.
 - `server/src/__tests__/lib/provider-timeout.test.ts` (3 additions): default/env/source/isolation/malformed environment.
 - `server/src/__tests__/lib/fallback-loop.test.ts` (3 additions): scheduler 65s wait excluded from 45s fallback budget, no post-commit SSE second attempt, upstream timeout retry max 3 without a 429 cycle.
+- `server/src/__tests__/providers/provider-pacing-http-mock.test.ts` (5 additions): real loopback `127.0.0.1` HTTP server with scaled non-stream and SSE delays, first-byte versus mid-SSE stall, timeout, and client cancellation. Its `fetch` target is redirected **only** to localhost; no external key or provider request.
 
 **IMPORTANT evidence boundary:** all listed tests are **committed source**, **not claimed green**. The exact updated monorepo checkout + npm workspaces are unavailable in this tool runtime (git clone cannot resolve github.com). The previous 20 core tests were in a reconstructed isolated harness and do not certify this changed timeout/provider integration. Branch GitHub Actions outcome has not been independently retrieved. Do not deploy or enable on this basis.
 
@@ -72,6 +74,7 @@ This integration crosses proxy/chat, legacy completions, Responses, Anthropic, i
 
 - `server/src/index.ts` configures Node `keepAliveTimeout=75_000` and `headersTimeout=76_000`. These govern idle persistent connections and request-header parsing, **not** a 76-second maximum for an already-accepted 185-second generation.
 - Caddy's documented `reverse_proxy` HTTP transport defaults are no `response_header_timeout` and no `read_timeout`. See https://caddyserver.com/docs/caddyfile/directives/reverse_proxy ; this does **not** prove the running VPS Caddyfile has not set them or that Harness/Codex clients permit 185s.
+- **Codex risk identified in the fork:** `server/src/routes/responses.ts` near its Fusion streaming implementation comments on an approximately **15-second Responses client idle watchdog** and uses real `response.in_progress` events for Fusion. This is a code comment/compatibility hint, **not verified against the current Codex CLI binary or Harness**. An ordinary request held for 65 seconds *before* any SSE event may disconnect even if Caddy/Node allow it. Do not introduce invented pre-provider SSE output or prematurely mark a response committed; first test actual client watchdog settings and protocol-valid event ordering in an isolated harness.
 - At least 65s queue + 120s possible upstream **= 185s before retries**, excluding tool processing and server translation. For a **single** such attempt, a *candidate* total request deadline around **210,000–240,000 ms** may be reasonable only after checking client/Caddy maximums and validating disconnect semantics. Multiple fallback hops need a separately modeled end-to-end bound, not multiplication of unlimited retries.
 - Stalled SSE streams are separately bounded by 90s inactivity by default; a steady streaming response can legitimately run much longer than the initial 120s first-byte allowance.
 
@@ -86,7 +89,7 @@ This integration crosses proxy/chat, legacy completions, Responses, Anthropic, i
 ## Verification gates still open
 
 1. Full server + client lint/build and all Vitest tests on exact branch head, CI results.
-2. Real local HTTP mock for 61–90s responses, 65s scheduler wait followed by 120s fetch, SSE commit and stall without retry, client disconnections and no leak. Added tests mock `global.fetch`, not a listening mock HTTP service.
+2. Run the committed fake-clock 61–90s and 65s+120s mock tests AND the new scaled loopback HTTP server tests under repository Vitest. End-to-end HTTP through the actual FreeLLMAPI listening gateway, real SSE commit transitions and client disconnect/lease audit remain outstanding.
 3. Read-only view of active VPS Caddy, Node and client timeouts only **after user permission**.
 4. Confirm named groups, account/pool identity, startup single-writer, durable store, and full AT-01..AT-22 tests before queue activation.
 5. No paid upstream API, provider quota or production deployment used in this work.
