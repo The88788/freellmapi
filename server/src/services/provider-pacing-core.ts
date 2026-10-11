@@ -233,6 +233,8 @@ export class ProviderPacingCore {
   private readonly waiting: Waiter[] = [];
   private timer: unknown;
   private stopped = false;
+  private draining = false;
+  private drainRequested = false;
   private inflight = 0;
   private readonly metrics = {
     enqueued: 0, admitted: 0, cancelled: 0, timedOut: 0, overloaded: 0,
@@ -319,6 +321,7 @@ export class ProviderPacingCore {
     fairnessWaiter?: Waiter,
     readiness?: PacingRequest['readiness'],
     onAdmit?: PacingRequest['onAdmit'],
+    signal?: AbortSignal,
   ): PacingGrant | null {
     const now = this.clock.now();
     // FIFO for EACH applicable quota bucket. One waiter can belong to many buckets.
@@ -335,6 +338,13 @@ export class ProviderPacingCore {
     // and lease before any upstream byte can be sent.
     let claimed: ReturnType<NonNullable<PacingRequest['onAdmit']>> | undefined;
     if (onAdmit) claimed = onAdmit();
+    // Cancellation may occur synchronously during candidate selection. The
+    // caller has not seen a grant, so neither resources nor a pacing start
+    // may be retained for that cancelled request.
+    if (signal?.aborted) {
+      try { claimed?.rollback(); } catch { /* preserve abort */ }
+      throw new PacingError('client_cancelled', 499);
+    }
     try {
       // Fail-closed: do not dispatch if the durable reservation fails.
       if (changes.length) this.store?.commitStarts(changes);
@@ -408,6 +418,7 @@ export class ProviderPacingCore {
     try {
       const grant = this.admit(
         buckets, request.estimatedTokens, now, undefined, request.readiness, request.onAdmit,
+        request.signal,
       );
       if (grant) return Promise.resolve(grant);
       // Validate impossible TPM before queuing, even if another waiter is ahead.
@@ -450,6 +461,12 @@ export class ProviderPacingCore {
 
   private drain(): void {
     if (this.stopped) return;
+    if (this.draining) {
+      this.drainRequested = true;
+      return;
+    }
+    this.draining = true;
+    try {
     // No await: all checks and reservations remain serialized on this process.
     for (const waiter of [...this.waiting]) {
       if (!this.waiting.includes(waiter)) continue;
@@ -469,6 +486,7 @@ export class ProviderPacingCore {
         const grant = this.admit(
           waiter.buckets, waiter.request.estimatedTokens, waiter.queuedAtMs,
           waiter, waiter.request.readiness, waiter.request.onAdmit,
+          waiter.request.signal,
         );
         if (grant) {
           this.removeWaiter(waiter);
@@ -479,7 +497,14 @@ export class ProviderPacingCore {
         waiter.reject(err instanceof Error ? err : new PacingError('invalid_policy', 503));
       }
     }
-    this.reschedule();
+    } finally {
+      this.draining = false;
+      this.reschedule();
+      if (this.drainRequested) {
+        this.drainRequested = false;
+        this.drain();
+      }
+    }
   }
 
   private reschedule(): void {
