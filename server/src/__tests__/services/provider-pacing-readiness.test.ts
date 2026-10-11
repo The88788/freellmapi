@@ -135,3 +135,67 @@ test('client abort removes blocked legacy waiter and forbids late grant', async 
   expect(scheduler.status().pending).toBe(0);
   scheduler.shutdown();
 });
+
+
+function sharedPollinationsConfig(concurrency: number): PacingConfig {
+  return {
+    enabled: true, maxPendingGlobal: 20, maxPendingPerClient: 20,
+    rules: [{
+      id: 'pollinations-provider-65s', enabled: true, scope: 'provider',
+      match: { platform: 'pollinations' },
+      limits: { minStartIntervalMs: 65_000, maxConcurrent: concurrency },
+      queue: { maxWaitMs: 240_000, maxPendingPerBucket: 20 },
+    }],
+  };
+}
+const pollinationsCall = (clientId: string, modelId: string, keyId: number) => ({
+  identity: { platform: 'pollinations', modelId, keyId },
+  clientId, estimatedTokens: 500,
+});
+
+test('one Pollinations provider-wide 1 RPM bucket spans models, keys and client apps', async () => {
+  const clock = new FakeClock();
+  const scheduler = new ProviderPacingCore(sharedPollinationsConfig(2), { clock });
+  const first = await scheduler.schedule(pollinationsCall('Harness', 'muse-glimmer', 9));
+  const secondPromise = scheduler.schedule(pollinationsCall('Codex', 'another-model', 10));
+  clock.tick(64_999);
+  expect(scheduler.counters().admitted).toBe(1);
+  clock.tick(65_000);
+  const second = await secondPromise;
+  expect(first.startedAtMs).toBe(0);
+  expect(second.startedAtMs).toBe(65_000);
+  expect(scheduler.counters().admitted).toBe(2);
+  first.release();
+  second.release();
+  scheduler.shutdown();
+});
+
+test('1 RPM and maxConcurrent 1 are independent: 120s upstream delays next start beyond 65s', async () => {
+  const clock = new FakeClock();
+  const scheduler = new ProviderPacingCore(sharedPollinationsConfig(1), { clock });
+  const first = await scheduler.schedule(pollinationsCall('Harness', 'muse-glimmer', 9));
+  const pending = scheduler.schedule(pollinationsCall('Codex', 'muse-glimmer', 9));
+  clock.tick(65_000);
+  expect(scheduler.status().pending).toBe(1);
+  expect(scheduler.status().inflight).toBe(1);
+  clock.tick(120_000);
+  first.release();
+  const second = await pending;
+  expect(second.startedAtMs).toBe(120_000);
+  second.release();
+  scheduler.shutdown();
+});
+
+test('unrelated provider does not inherit Pollinations queue or timeout', async () => {
+  const clock = new FakeClock();
+  const scheduler = new ProviderPacingCore(sharedPollinationsConfig(1), { clock });
+  const first = await scheduler.schedule(pollinationsCall('Harness', 'muse-glimmer', 9));
+  const nvidia = await scheduler.schedule({
+    identity: { platform: 'nvidia', modelId: 'nemotron', keyId: 20 },
+    clientId: 'Codex', estimatedTokens: 500,
+  });
+  expect(nvidia.startedAtMs).toBe(0);
+  first.release();
+  nvidia.release();
+  scheduler.shutdown();
+});
