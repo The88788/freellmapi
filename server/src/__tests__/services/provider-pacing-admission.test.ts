@@ -165,6 +165,65 @@ describe('atomic pacing + existing lease/monthly-budget admission', () => {
     scheduler.shutdown();
   });
 
+  it('abort synchronously inside legacy commit rolls back before recording start', async () => {
+    const clock = new Clock();
+    let writes = 0;
+    let activeLeases = 0;
+    const abort = new AbortController();
+    const scheduler = new ProviderPacingCore(config(), {
+      clock,
+      store: {
+        readNextEligible: () => 0,
+        commitStarts: () => { writes++; },
+      },
+    });
+    const pending = scheduler.schedule({
+      identity, clientId: 'Codex', estimatedTokens: 500, signal: abort.signal,
+      onAdmit: () => {
+        activeLeases++;
+        abort.abort();
+        return {
+          resource: { keyId: 9 },
+          rollback: () => { activeLeases--; },
+        };
+      },
+    });
+    await expect(pending).rejects.toMatchObject({ code: 'client_cancelled' });
+    expect(activeLeases).toBe(0);
+    expect(writes).toBe(0);
+    expect(scheduler.status().inflight).toBe(0);
+    scheduler.shutdown();
+  });
+
+  it('reentrant abort during waiter admission does not block the next FIFO caller', async () => {
+    const clock = new Clock();
+    const scheduler = new ProviderPacingCore(config(), { clock });
+    const first = await scheduler.schedule({ identity, clientId: 'Harness', estimatedTokens: 500 });
+    const abort = new AbortController();
+    let active = 0;
+    const cancelled = scheduler.schedule({
+      identity, clientId: 'Codex', estimatedTokens: 500, signal: abort.signal,
+      onAdmit: () => {
+        active++;
+        abort.abort(); // abort handler fires synchronously inside drain()
+        return { resource: true, rollback: () => { active--; } };
+      },
+    });
+    const next = scheduler.schedule({
+      identity, clientId: 'Harness-2', estimatedTokens: 500,
+      onAdmit: () => ({ resource: { actual: 'next' }, rollback: () => {} }),
+    });
+    clock.tick(65_000);
+    await expect(cancelled).rejects.toMatchObject({ code: 'client_cancelled' });
+    const accepted = await next;
+    expect(accepted.startedAtMs).toBe(65_000);
+    expect(accepted.resource).toEqual({ actual: 'next' });
+    expect(active).toBe(0);
+    first.release();
+    accepted.release();
+    scheduler.shutdown();
+  });
+
   it('a matching-rule miss still acquires legacy route exactly once', async () => {
     const clock = new Clock();
     const scheduler = new ProviderPacingCore(config(), { clock });
