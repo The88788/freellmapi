@@ -701,3 +701,28 @@ export function isStreamTruncatedError(err: any): boolean {
     // a terminated mid-stream body is the same dead route either way.
     || msg === 'terminated';
 }
+
+/**
+ * Extra diagnostics for the pacing/fallback boundary. This does NOT change
+ * retryability or the established OpenAI error.code values. It distinguishes
+ * provider timeouts from local queue waits, partial SSE stalls and real 429s.
+ */
+export type RequestTerminationReason =
+  | 'queue_timeout' | 'upstream_timeout' | 'first_byte_timeout'
+  | 'stream_stall' | 'client_abort' | 'rate_limit' | 'fallback_exhausted';
+
+export function requestTerminationReason(err: any): RequestTerminationReason | null {
+  if (isClientAbortError(err)) return 'client_abort';
+  if (isHedgeAbortError(err)) return 'fallback_exhausted';
+  if (err?.code === 'rate_limit_exceeded' && err?.name === 'PacingError') return 'queue_timeout';
+  if (isRateLimitSignal(err)) return 'rate_limit';
+  const msg = String(err?.message ?? '').toLowerCase();
+  if (msg.includes('stream stalled')) return 'stream_stall';
+  if (msg.includes('first-byte timeout') || msg.includes('no first byte within')) {
+    return 'first_byte_timeout';
+  }
+  if (isTimeoutErrorText(msg) || err?.name === 'AbortError' || err?.name === 'TimeoutError') {
+    return 'upstream_timeout';
+  }
+  return null;
+}
