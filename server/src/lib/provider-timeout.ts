@@ -52,6 +52,39 @@ export function providerTimeoutMs(platform: string, defaultMs: number): number {
   return parseTimeoutEnv(providerTimeoutEnvName(platform), defaultMs);
 }
 
+/**
+ * Effective timeout policy snapshot. OpenAI-compatible providers capture this
+ * once in their constructor. The source must be captured at the same moment:
+ * reading process.env again after an operator edits it would misreport a live
+ * worker's effective timeout until that worker restarts.
+ */
+export interface ProviderTimeoutSetting {
+  timeoutMs: number;
+  source: 'environment' | 'provider_default';
+  envName: string;
+  defaultMs: number;
+  restartRequiredToChange: true;
+}
+
+export function providerTimeoutSetting(
+  platform: string,
+  defaultMs: number,
+): ProviderTimeoutSetting {
+  const envName = providerTimeoutEnvName(platform);
+  const raw = process.env[envName];
+  const parsed = raw === undefined || raw.trim() === '' ? NaN : Number(raw.trim());
+  const source = Number.isInteger(parsed) && parsed >= 0
+    ? 'environment' as const
+    : 'provider_default' as const;
+  return {
+    timeoutMs: providerTimeoutMs(platform, defaultMs),
+    source,
+    envName,
+    defaultMs,
+    restartRequiredToChange: true,
+  };
+}
+
 export const DEFAULT_STREAM_STALL_TIMEOUT_MS = 90_000;
 
 export function streamStallTimeoutEnvName(platform: string): string {
