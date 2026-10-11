@@ -3,6 +3,7 @@ import {
   DEFAULT_STREAM_STALL_TIMEOUT_MS,
   providerTimeoutEnvName,
   providerTimeoutMs,
+  providerTimeoutSetting,
   resetTimeoutWarnings,
   streamStallTimeoutMs,
 } from '../../lib/provider-timeout.js';
@@ -102,5 +103,43 @@ describe('streamStallTimeoutMs', () => {
     process.env.PROVIDER_STREAM_STALL_TIMEOUT_NVIDIA = 'ninety';
     expect(streamStallTimeoutMs('nvidia')).toBe(240_000);
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('provider timeout diagnostics snapshot (Pollinations)', () => {
+  afterEach(() => {
+    delete process.env.PROVIDER_TIMEOUT_POLLINATIONS;
+  });
+
+  it('resolves the 60s Pollinations default and names its source', () => {
+    expect(providerTimeoutSetting('pollinations', 60_000)).toEqual({
+      timeoutMs: 60_000,
+      source: 'provider_default',
+      envName: 'PROVIDER_TIMEOUT_POLLINATIONS',
+      defaultMs: 60_000,
+      restartRequiredToChange: true,
+    });
+  });
+
+  it('resolves only the Pollinations 120s override and leaves other sources unchanged', () => {
+    process.env.PROVIDER_TIMEOUT_POLLINATIONS = '120000';
+    expect(providerTimeoutSetting('pollinations', 60_000)).toMatchObject({
+      timeoutMs: 120_000, source: 'environment',
+    });
+    expect(providerTimeoutSetting('nvidia', 180_000)).toMatchObject({
+      timeoutMs: 180_000, source: 'provider_default',
+    });
+    expect(providerTimeoutSetting('mistral', 60_000)).toMatchObject({
+      timeoutMs: 60_000, source: 'provider_default',
+    });
+  });
+
+  it('rejects an invalid Pollinations env override without misreporting it as active', () => {
+    process.env.PROVIDER_TIMEOUT_POLLINATIONS = 'two_minutes';
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(providerTimeoutSetting('pollinations', 60_000)).toMatchObject({
+      timeoutMs: 60_000, source: 'provider_default',
+    });
+    warnings.mockRestore();
   });
 });
