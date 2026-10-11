@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, describe, expect, it } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { initDb } from '../../db/index.js';
 import { PollinationsProvider } from '../../providers/pollinations.js';
 import { OpenAICompatProvider } from '../../providers/openai-compat.js';
@@ -92,6 +92,43 @@ describe('live dashboard per-provider/model timeout settings', () => {
     expect(() => saveProviderTimeoutOverride('pollinations', 'bad\nmodel', 120_000)).toThrow();
     expect(() => saveProviderTimeoutOverride('pollinations;DELETE', undefined, 120_000)).toThrow();
     expect(() => saveProviderTimeoutOverride('pollinations', undefined, 0)).toThrow();
+  });
+
+  it('passes manually edited timeout into actual non-stream provider fetch calls', async () => {
+    const provider = new PollinationsProvider();
+    const mock = vi.spyOn(provider as any, 'fetchWithTimeout').mockImplementation(
+      async () => new Response(JSON.stringify({
+        id: 'mock-id', object: 'chat.completion', created: 1, model: 'test-model',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const messages = [{ role: 'user' as const, content: 'local test' }];
+    saveProviderTimeoutOverride('pollinations', undefined, 120_000);
+    await provider.chatCompletion('fake', messages, 'test-model');
+    saveProviderTimeoutOverride('pollinations', 'test-model', 180_000);
+    await provider.chatCompletion('fake', messages, 'test-model');
+    await provider.chatCompletion('fake', messages, 'other-model');
+    expect(mock).toHaveBeenCalledTimes(3);
+    expect(mock.mock.calls[0]?.[2]).toBe(120_000);
+    expect(mock.mock.calls[1]?.[2]).toBe(180_000);
+    expect(mock.mock.calls[2]?.[2]).toBe(120_000);
+  });
+
+  it('per-call timeout from the existing CompletionOptions overrides the dashboard', async () => {
+    const provider = new PollinationsProvider();
+    const mock = vi.spyOn(provider as any, 'fetchWithTimeout').mockImplementation(
+      async () => new Response(JSON.stringify({
+        id: 'mock-id', object: 'chat.completion', created: 1, model: 'test-model',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    saveProviderTimeoutOverride('pollinations', undefined, 120_000);
+    await provider.chatCompletion('fake', [{ role: 'user', content: 'test' }], 'test-model', {
+      timeoutMs: 45_000,
+    });
+    expect(mock.mock.calls[0]?.[2]).toBe(45_000);
   });
 
   it('active call keeps its original timeout snapshot after a concurrent edit', () => {
