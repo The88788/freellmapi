@@ -1100,7 +1100,7 @@ export function exhaustedRetryError(lastError: any, maxRetries?: number, ctx?: E
     code: 'upstream_failed',
     ...(lastReason ? { reason: lastReason } : {}),
     message: `All ${attempts.length} routed attempt(s) failed with upstream provider errors${breakdown}${budgetNote}. ` +
-      `${verdict}${trail} Last error: ${safeLastError}`,
+      `${verdict}${lastReason ? ` Diagnosis: ${lastReason} (this timeout is not itself a provider 429).` : ''}${trail} Last error: ${safeLastError}`,
   };
 }
 
