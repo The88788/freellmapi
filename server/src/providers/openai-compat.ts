@@ -93,7 +93,6 @@ export class OpenAICompatProvider extends BaseProvider {
   /** Per-provider HTTP timeout override. OpenAI-compatible gateways often buffer
    * non-streaming responses until generation completes, and reasoning models can
    * take >15s before first byte. Default 60000. */
-  private readonly timeoutMs: number;
   private readonly timeoutSetting: ProviderTimeoutSetting;
   /** NVIDIA NIM models reject any request that permits parallel tool calls with
    * `400 This model only supports single tool-calls at once!`. When set, pin
@@ -124,7 +123,6 @@ export class OpenAICompatProvider extends BaseProvider {
     this.validateUrl = opts.validateUrl;
     // PROVIDER_TIMEOUT_<PLATFORM> wins over the registration default (#547).
     this.timeoutSetting = providerTimeoutSetting(opts.platform, opts.timeoutMs ?? 60_000);
-    this.timeoutMs = this.timeoutSetting.timeoutMs;
     this.keyless = opts.keyless ?? false;
     this.forceSingleToolCall = opts.forceSingleToolCall ?? false;
     this.forwardsPartial = opts.platform === 'custom' && isMoonshotEndpoint(opts.baseUrl);
