@@ -29,7 +29,7 @@ interface PacingRuntimeStatus {
   enabled: boolean
   configEnabled: boolean
   status: { pending: number; inflight: number; stopped: boolean }
-  counters: { enqueued: number; admitted: number; cancelled: number; timedOut: number; overloaded: number }
+  counters: { enqueued: number; admitted: number; cancelled: number; timedOut: number; overloaded: number; totalQueueWaitMs?: number; maxQueueWaitMs?: number }
   providerTimeouts?: Record<string, {
     timeoutMs: number
     source: 'environment' | 'provider_default'
@@ -170,6 +170,19 @@ export function ProviderPacingSettings({ open }: { open: boolean }) {
         <div><p className="font-semibold">{runtime?.status.inflight ?? '–'}</p><p className="text-muted-foreground">{ru ? 'В работе' : 'In flight'}</p></div>
         <div><p className="font-semibold">{runtime?.enabled ? (ru ? 'Да' : 'Yes') : (ru ? 'Нет' : 'No')}</p><p className="text-muted-foreground">{ru ? 'Активна' : 'Active'}</p></div>
       </div>
+
+      {runtime?.counters && (
+        <div className="rounded-lg border p-3 text-xs text-muted-foreground">
+          {ru ? 'Ожидание очереди' : 'Queue wait'}:
+          {' '}{runtime.counters.admitted > 0
+            ? Math.round((runtime.counters.totalQueueWaitMs ?? 0) / runtime.counters.admitted)
+            : 0} ms {ru ? '(среднее)' : '(mean)'}
+          {' | '}{ru ? 'максимум' : 'max'} {runtime.counters.maxQueueWaitMs ?? 0} ms.
+          {' '}{ru
+            ? 'Задержка провайдера измеряется отдельно в истории upstream-попыток.'
+            : 'Provider duration is measured separately in upstream attempt history.'}
+        </div>
+      )}
 
       {runtime?.providerTimeouts && (
         <div className="space-y-2 rounded-lg border p-3">
