@@ -50,6 +50,8 @@ import {
   isContextTooLargeError,
   isTimeoutErrorText,
   isStreamTruncatedError,
+  requestTerminationReason,
+  type RequestTerminationReason,
 } from './error-classify.js';
 import { sanitizeProviderErrorMessage, summarizeAttemptError } from './error-redaction.js';
 import { benchForTools, clearToolRejections, noteToolRejection, toolCapabilityKey } from './tool-capability.js';
@@ -864,6 +866,8 @@ export interface ExhaustionBody {
   kind: 'auth' | 'bad_request' | 'rate_limit' | 'unavailable' | 'context_too_large' | 'model_not_found' | 'upstream';
   // Machine-readable code for the OpenAI-compatible error object.
   code?: string;
+  /** Stable cause detail without replacing existing OpenAI-compatible code. */
+  reason?: RequestTerminationReason;
   // 429 exhaustions only: epoch ms of the earliest moment any benched candidate
   // becomes available again (soonest cooldown expiry). Rendered in the error
   // body and as a Retry-After header (seconds, ceil) by setExhaustionHeaders.
@@ -875,12 +879,13 @@ export interface ExhaustionBody {
  * OpenAI-shaped surface so the wire shape (message/type/code/retryAtMs) cannot
  * drift between them.
  */
-export function exhaustionErrorPayload(body: ExhaustionBody): { message: string; type: string; code?: string; retryAtMs?: number } {
-  const payload: { message: string; type: string; code?: string; retryAtMs?: number } = {
+export function exhaustionErrorPayload(body: ExhaustionBody): { message: string; type: string; code?: string; reason?: RequestTerminationReason; retryAtMs?: number } {
+  const payload: { message: string; type: string; code?: string; reason?: RequestTerminationReason; retryAtMs?: number } = {
     message: body.message,
     type: body.type,
   };
   if (body.code) payload.code = body.code;
+  if (body.reason) payload.reason = body.reason;
   if (body.retryAtMs != null) payload.retryAtMs = body.retryAtMs;
   return payload;
 }
@@ -1084,11 +1089,16 @@ export function exhaustedRetryError(lastError: any, maxRetries?: number, ctx?: E
     ? 'Most of these failures are provider-side (stale models, exhausted credits or quotas), but some providers ' +
       'also rejected the request shape — check the attempt trail for which ones before changing your request.'
     : 'This is a provider-side failure, not a problem with your request; retry, or check provider status.';
+  const classified = requestTerminationReason(lastError);
+  const lastReason = ctx?.timedOut ? 'fallback_exhausted' as const
+    : classified === 'upstream_timeout' || classified === 'first_byte_timeout'
+      || classified === 'stream_stall' ? classified : undefined;
   return {
     kind: 'upstream',
     status: 502,
     type: 'provider_error',
     code: 'upstream_failed',
+    ...(lastReason ? { reason: lastReason } : {}),
     message: `All ${attempts.length} routed attempt(s) failed with upstream provider errors${breakdown}${budgetNote}. ` +
       `${verdict}${trail} Last error: ${safeLastError}`,
   };
@@ -1149,6 +1159,7 @@ export function routingExhaustionBody(routeErr: any): ExhaustionBody {
     };
     return {
       kind: overloaded ? 'unavailable' : 'rate_limit',
+      ...(routeErr.code === 'rate_limit_exceeded' ? { reason: 'queue_timeout' as const } : {}),
       status: routeErr.status,
       type: overloaded ? 'service_unavailable' : 'rate_limit_error',
       code: routeErr.code,
