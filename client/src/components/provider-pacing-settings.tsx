@@ -30,6 +30,15 @@ interface PacingRuntimeStatus {
   configEnabled: boolean
   status: { pending: number; inflight: number; stopped: boolean }
   counters: { enqueued: number; admitted: number; cancelled: number; timedOut: number; overloaded: number }
+  providerTimeouts?: Record<string, {
+    timeoutMs: number
+    source: 'environment' | 'provider_default'
+    envName: string
+    streamStallTimeoutMs: number
+    firstByteTimeoutMs: number
+    streamStallSource: string
+    restartRequiredToChange: true
+  }>
 }
 
 /**
@@ -161,6 +170,29 @@ export function ProviderPacingSettings({ open }: { open: boolean }) {
         <div><p className="font-semibold">{runtime?.status.inflight ?? '–'}</p><p className="text-muted-foreground">{ru ? 'В работе' : 'In flight'}</p></div>
         <div><p className="font-semibold">{runtime?.enabled ? (ru ? 'Да' : 'Yes') : (ru ? 'Нет' : 'No')}</p><p className="text-muted-foreground">{ru ? 'Активна' : 'Active'}</p></div>
       </div>
+
+      {runtime?.providerTimeouts && (
+        <div className="space-y-2 rounded-lg border p-3">
+          <h3 className="text-xs font-semibold">
+            {ru ? 'Тайм-ауты провайдеров (эффективные)' : 'Effective provider timeouts'}
+          </h3>
+          <p className="text-[11px] text-muted-foreground">
+            {ru
+              ? 'Значения текущего процесса. Для изменения переменной окружения потребуется перезапуск процесса, но не сохраняйте эти значения как правила очереди.'
+              : 'Values from the running process. Environment changes require process restart; these are not queue policies.'}
+          </p>
+          {Object.entries(runtime.providerTimeouts).map(([platform, policy]) => (
+            <div key={platform} className="flex flex-wrap justify-between gap-2 border-t pt-2 text-[11px]">
+              <div className="font-medium">{platform}</div>
+              <div className="text-muted-foreground">
+                {policy.timeoutMs / 1000}s ({policy.source === 'environment' ? policy.envName : (ru ? 'По умолчанию' : 'Default')})
+                {' | '}first byte {policy.firstByteTimeoutMs / 1000}s
+                {' | '}stall {policy.streamStallTimeoutMs / 1000}s
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <fieldset disabled={busy !== null} className="space-y-3 rounded-lg border p-3">
         <legend className="px-1 text-xs font-semibold">{ru ? 'Добавить правило Pollinations' : 'Add a Pollinations rule'}</legend>
