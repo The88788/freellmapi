@@ -14,6 +14,7 @@ import { invalidToolCallReasons, isToolArgumentValidationEnabled } from '../lib/
 import { recordQuotaObservation, recordQuotaObservationsFromResponse, type QuotaObservationContext } from '../services/provider-quota.js';
 import type { QuotaMetric } from '@freellmapi/shared/types.js';
 import { providerTimeoutSetting, streamStallTimeoutMs, type ProviderTimeoutSetting } from '../lib/provider-timeout.js';
+import { effectiveProviderTimeout, type EffectiveProviderTimeout } from '../services/provider-timeout-overrides.js';
 import { isAbortLikeError } from '../lib/error-classify.js';
 import { contentToString } from '../lib/content.js';
 import { bearerAuthHeader } from '../lib/credential.js';
@@ -135,12 +136,13 @@ export class OpenAICompatProvider extends BaseProvider {
    * constructor value; per-call CompletionOptions.timeoutMs can still override.
    * SSE first-byte grace is max(chat, stall); stream stall is independent.
    */
-  getTimeoutStatus(): ProviderTimeoutSetting & {
+  getTimeoutStatus(modelId?: string): EffectiveProviderTimeout & {
     streamStallTimeoutMs: number;
     firstByteTimeoutMs: number;
     streamStallSource: 'provider_environment' | 'global_environment' | 'default';
   } {
     const stall = streamStallTimeoutMs(this.platform);
+    const effective = effectiveProviderTimeout(this.platform, modelId, this.timeoutSetting);
     const platformEnv = `PROVIDER_STREAM_STALL_TIMEOUT_${this.platform.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
     const valid = (name: string) => {
       const raw = process.env[name];
@@ -148,9 +150,10 @@ export class OpenAICompatProvider extends BaseProvider {
         && Number.isInteger(Number(raw)) && Number(raw) >= 0;
     };
     return {
-      ...this.timeoutSetting,
+      ...effective,
       streamStallTimeoutMs: stall,
-      firstByteTimeoutMs: this.timeoutMs <= 0 || stall <= 0 ? 0 : Math.max(this.timeoutMs, stall),
+      firstByteTimeoutMs: effective.timeoutMs <= 0 || stall <= 0 ? 0
+        : Math.max(effective.timeoutMs, stall),
       streamStallSource: valid(platformEnv) ? 'provider_environment'
         : valid('PROVIDER_STREAM_STALL_TIMEOUT_MS') ? 'global_environment' : 'default',
     };
@@ -329,6 +332,10 @@ export class OpenAICompatProvider extends BaseProvider {
     quotaContext?: QuotaObservationContext,
   ): Promise<ChatCompletionResponse> {
     const sampling = this.samplingForModel(modelId, options);
+    // Snapshot once: a saved dashboard change may affect the NEXT attempt,
+    // never this running provider call or its streamed first-byte watchdog.
+    const outboundTimeoutMs = options?.timeoutMs
+      ?? effectiveProviderTimeout(this.platform, modelId, this.timeoutSetting).timeoutMs;
     const res = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -350,7 +357,7 @@ export class OpenAICompatProvider extends BaseProvider {
       }),
       // 'request' bounds: the deadline covers the body read too, so a 200
       // whose body hangs aborts instead of stalling res.json() forever.
-    }, options?.timeoutMs ?? this.timeoutMs, { signal: options?.signal, timeoutBounds: 'request' });
+    }, outboundTimeoutMs, { signal: options?.signal, timeoutBounds: 'request' });
 
     recordQuotaObservationsFromResponse(res, {
       platform: this.platform,
@@ -458,6 +465,10 @@ export class OpenAICompatProvider extends BaseProvider {
     quotaContext?: QuotaObservationContext,
   ): AsyncGenerator<ChatCompletionChunk> {
     const sampling = this.samplingForModel(modelId, options);
+    // Snapshot once: a saved dashboard change may affect the NEXT attempt,
+    // never this running provider call or its streamed first-byte watchdog.
+    const outboundTimeoutMs = options?.timeoutMs
+      ?? effectiveProviderTimeout(this.platform, modelId, this.timeoutSetting).timeoutMs;
     const res = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -481,7 +492,7 @@ export class OpenAICompatProvider extends BaseProvider {
       }),
       // Default 'headers' bounds: the deadline dies at response headers, and
       // the client signal + stall watchdog own the stream from there.
-    }, options?.timeoutMs ?? this.timeoutMs, { signal: options?.signal });
+    }, outboundTimeoutMs, { signal: options?.signal });
 
     recordQuotaObservationsFromResponse(res, {
       platform: this.platform,
@@ -510,7 +521,7 @@ export class OpenAICompatProvider extends BaseProvider {
     // also budgets the first stream read — NIM-style providers send SSE
     // headers instantly, then prefill long prompts for minutes.
     yield* this.guardInBandCreditsError(
-      this.readSseStream(res, { firstByteTimeoutMs: options?.timeoutMs ?? this.timeoutMs }),
+      this.readSseStream(res, { firstByteTimeoutMs: outboundTimeoutMs }),
     );
   }
 
