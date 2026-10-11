@@ -55,6 +55,8 @@ export function ProviderPacingSettings({ open }: { open: boolean }) {
   const [runtime, setRuntime] = useState<PacingRuntimeStatus | null>(null)
   const [modelId, setModelId] = useState('')
   const [keyId, setKeyId] = useState('')
+  const [pacingScope, setPacingScope] = useState<'provider' | 'model' | 'model-key'>('provider')
+  const [maxConcurrent, setMaxConcurrent] = useState('1')
   const [intervalMs, setIntervalMs] = useState('65000')
   const [busy, setBusy] = useState<'load' | 'save' | 'validate' | null>(null)
   const [message, setMessage] = useState('')
@@ -95,25 +97,33 @@ export function ProviderPacingSettings({ open }: { open: boolean }) {
     setMessage('')
     const parsedKey = Number(keyId)
     const parsedInterval = Number(intervalMs)
-    if (!modelId.trim() || !/^\d+$/.test(keyId) || !Number.isSafeInteger(parsedKey)
-      || parsedKey <= 0 || !Number.isSafeInteger(parsedInterval) || parsedInterval < 1) {
+    const concurrent = Number(maxConcurrent)
+    if ((pacingScope !== 'provider' && !modelId.trim())
+      || (pacingScope === 'model-key' && (!/^\d+$/.test(keyId) || !Number.isSafeInteger(parsedKey) || parsedKey <= 0))
+      || !Number.isSafeInteger(parsedInterval) || parsedInterval < 1
+      || !Number.isSafeInteger(concurrent) || concurrent < 1) {
       setError(ru
-        ? 'Укажите фактический modelId, числовой keyId и положительный интервал.'
-        : 'Enter the actual modelId, numeric keyId and a positive interval.')
+        ? 'Проверьте область правила, интервал, параллелизм, modelId и keyId (если требуются).'
+        : 'Check scope, interval, concurrency, and required model/key identifiers.')
       return
     }
     try {
       const config = parse()
-      const id = 'pollinations-model-key-' + parsedKey
+      const id = 'pollinations-' + pacingScope + '-'
+        + (pacingScope === 'provider' ? 'all' : modelId.trim() + (pacingScope === 'model-key' ? '-' + parsedKey : ''))
       if (config.rules.some(rule => rule.id === id)) {
         throw new Error(ru ? 'Правило для этого ключа уже есть.' : 'A rule for this key already exists.')
       }
       const rule: PacingRuleDraft = {
         id,
         enabled: true,
-        scope: 'model-key',
-        match: { platform: 'pollinations', modelId: modelId.trim(), keyId: parsedKey },
-        limits: { minStartIntervalMs: parsedInterval, maxConcurrent: 1 },
+        scope: pacingScope,
+        match: {
+          platform: 'pollinations',
+          ...(pacingScope !== 'provider' ? { modelId: modelId.trim() } : {}),
+          ...(pacingScope === 'model-key' ? { keyId: parsedKey } : {}),
+        },
+        limits: { minStartIntervalMs: parsedInterval, maxConcurrent: concurrent },
         queue: { maxWaitMs: 180000, maxPendingPerBucket: 20 },
       }
       setDraft(JSON.stringify({ ...config, enabled: false, rules: [...config.rules, rule] }, null, 2))
@@ -190,25 +200,39 @@ export function ProviderPacingSettings({ open }: { open: boolean }) {
       <fieldset disabled={busy !== null} className="space-y-3 rounded-lg border p-3">
         <legend className="px-1 text-xs font-semibold">{ru ? 'Добавить правило Pollinations' : 'Add a Pollinations rule'}</legend>
         <label className="block space-y-1 text-xs">
+          <span>{ru ? 'Общая очередь для' : 'Shared bucket scope'}</span>
+          <select value={pacingScope} onChange={e => setPacingScope(e.target.value as typeof pacingScope)}
+            className="w-full rounded-lg border border-input bg-background px-3 py-2">
+            <option value="provider">{ru ? 'Всего Pollinations (все модели и ключи)' : 'All Pollinations models and keys'}</option>
+            <option value="model">{ru ? 'Одной модели (все ключи)' : 'One model, all keys'}</option>
+            <option value="model-key">{ru ? 'Модели и конкретного ключа' : 'One model and key'}</option>
+          </select>
+        </label>
+        {pacingScope !== 'provider' && <label className="block space-y-1 text-xs">
           <span>{ru ? 'Фактический modelId' : 'Actual modelId'}</span>
           <input value={modelId} onChange={e => setModelId(e.target.value)}
             placeholder={ru ? 'Укажите ID модели из маршрута' : 'Enter model ID from route'}
             className="w-full rounded-lg border border-input bg-transparent px-3 py-2 font-mono outline-none focus-visible:ring-2 focus-visible:ring-ring" />
-        </label>
+        </label>}
         <div className="grid grid-cols-2 gap-3">
-          <label className="block space-y-1 text-xs">
+          {pacingScope === 'model-key' && <label className="block space-y-1 text-xs">
             <span>keyId</span>
             <input value={keyId} onChange={e => setKeyId(e.target.value)} inputMode="numeric"
               placeholder="123" className="w-full rounded-lg border border-input bg-transparent px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring" />
-          </label>
+          </label> }
           <label className="block space-y-1 text-xs">
             <span>{ru ? 'Интервал, мс' : 'Start interval, ms'}</span>
             <input value={intervalMs} onChange={e => setIntervalMs(e.target.value)} inputMode="numeric"
               className="w-full rounded-lg border border-input bg-transparent px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring" />
           </label>
+          <label className="block space-y-1 text-xs">
+            <span>{ru ? 'Макс. одновременных запросов' : 'Max concurrent'}</span>
+            <input value={maxConcurrent} onChange={e => setMaxConcurrent(e.target.value)} inputMode="numeric"
+              className="w-full rounded-lg border border-input bg-transparent px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+          </label>
         </div>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          {ru ? 'Стартовый шаблон: 65 секунд между началами запросов, 1 одновременный запрос, ожидание до 180 секунд.' : 'Preset: 65s between starts, one concurrent call, maximum wait 180s.'}
+          {ru ? 'По умолчанию одна общая очередь Pollinations на всех клиентов. Интервал 65 секунд между стартами и лимит одновременности действуют НЕЗАВИСИМО от времени ответа модели.' : 'One shared Pollinations queue across clients by default. 65s between starts and concurrency are independent of the model response timeout.'}
         </p>
         <button type="button" onClick={addPollinationsRule}
           className="rounded-lg border px-3 py-1.5 text-xs transition-colors hover:bg-muted disabled:opacity-50">
