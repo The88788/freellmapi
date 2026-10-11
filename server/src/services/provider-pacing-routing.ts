@@ -84,6 +84,12 @@ export function schedulePacedRoute(
   return admittedRoute(scheduler, clientId, signal, args);
 }
 
+/**
+ * The committed legacy route is now acquired INSIDE scheduler.admit(), before
+ * the durable pacing timestamp. A failed commit never spends a pacing slot,
+ * and a failed SQLite write immediately releases the legacy budget/lease.
+ * Nothing in this function awaits between the two reservations.
+ */
 async function admittedRoute(
   scheduler: ProviderPacingCore,
   clientId: string,
@@ -92,66 +98,88 @@ async function admittedRoute(
 ): Promise<RouteResult> {
   const skipKeys = new Set(args[1] ?? []);
   let totalQueueWaitMs = 0;
-  // Bound a route that changes while waiting. A changed key/model is retried
-  // with a fresh preview; it never inherits the prior grant's identity.
+
   for (let revision = 0; revision < 4; revision++) {
     if (signal?.aborted) throw new PacingError('client_cancelled', 499);
+
     const preview = select(args, skipKeys, { mode: 'preview' });
-    // Preview does not hold a decrypted API key, budget reservation, or lease.
-    const grant = await scheduler.schedule({
-      identity: identityOf(preview),
-      clientId,
-      estimatedTokens: args[0] ?? 1000,
-      signal,
-      readiness: () => {
-        // Called at wake-up, before scheduler consumes any token/start slot.
-        // A key disabled during waiting is never returned as "ready".
-        try {
-          const live = select(args, skipKeys, {
-            mode: 'preview', modelDbId: preview.modelDbId, keyId: preview.keyId,
-          });
-          if (!sameCandidate(preview, live)) return { ready: false, readyAtMs: null };
-          return {
-            ready: !live.pacingTemporarilyBlocked,
-            readyAtMs: live.pacingReadyAtMs ?? null,
-          };
-        } catch {
-          return { ready: false, readyAtMs: null };
-        }
-      },
-    });
-    totalQueueWaitMs += grant.waitedMs;
+    let grant;
     try {
-      if (signal?.aborted) throw new PacingError('client_cancelled', 499);
-      const committed = select(args, skipKeys, {
-        mode: 'commit', modelDbId: preview.modelDbId, keyId: preview.keyId,
+      grant = await scheduler.schedule({
+        identity: identityOf(preview),
+        clientId,
+        estimatedTokens: args[0] ?? 1000,
+        signal,
+        readiness: () => {
+          // The profile/key could change during a 65-second queue wait.
+          // This check reads the exact model+key and may not reserve anything.
+          try {
+            const live = select(args, skipKeys, {
+              mode: 'preview', modelDbId: preview.modelDbId, keyId: preview.keyId,
+            });
+            if (!sameCandidate(preview, live)) return { ready: false, readyAtMs: null };
+            return {
+              ready: !live.pacingTemporarilyBlocked,
+              readyAtMs: live.pacingReadyAtMs ?? null,
+            };
+          } catch {
+            return { ready: false, readyAtMs: null };
+          }
+        },
+        onAdmit: () => {
+          if (signal?.aborted) throw new PacingError('client_cancelled', 499);
+          // The original routeRequest(commit) reserves the EXISTING month
+          // budget + key lease. The scheduler will roll it back if DB commit
+          // fails before any grant is issued.
+          const committed = select(args, skipKeys, {
+            mode: 'commit', modelDbId: preview.modelDbId, keyId: preview.keyId,
+          });
+          if (!sameCandidate(preview, committed)) {
+            committed.release?.();
+            throw new PacingCandidateChangedError();
+          }
+          return {
+            resource: committed,
+            rollback: () => committed.release?.(),
+          };
+        },
       });
-      if (!sameCandidate(preview, committed)) {
-        // If the client explicitly pinned a model, do not reroute silently
-        // to a substitute. Revalidate the same candidate in the next pass.
-        committed.release?.();
-        grant.release(0);
-        skipKeys.add(`${preview.platform}:${preview.modelId}:${preview.keyId}`);
-        continue;
-      }
-      const originalRelease = committed.release;
-      let released = false;
-      committed.release = () => {
-        if (released) return;
-        released = true;
-        try { originalRelease?.(); } finally { grant.release(); }
-      };
-      committed.pacingWaitedMs = totalQueueWaitMs;
-      return committed;
     } catch (err) {
-      grant.release(0);
-      // A routing failure after waiting means the candidate changed; exclude
-      // this key for the current inbound attempt and reconsider the full chain.
-      // Do NOT retry a failed storage commit or an explicit queue cancel.
+      // No upstream request happened, and no confirmed pacing start was spent.
+      // A removed or newly blocked key can be excluded and the remaining
+      // permitted chain considered. Operational pacing errors are terminal.
       if (err instanceof PacingError) throw err;
       skipKeys.add(`${preview.platform}:${preview.modelId}:${preview.keyId}`);
       if (revision === 3) throw err;
+      continue;
     }
+
+    totalQueueWaitMs += grant.waitedMs;
+    const committed = grant.resource as RouteResult | undefined;
+    // Important even for zero matching rules: a successful scheduler call
+    // MUST carry the exact route reserved by its onAdmit hook.
+    if (!committed) {
+      grant.release(0);
+      throw new PacingError('pacing_store_error', 503);
+    }
+    if (signal?.aborted) {
+      try { committed.release?.(); } finally { grant.release(0); }
+      throw new PacingError('client_cancelled', 499);
+    }
+
+    const originalRelease = committed.release;
+    let released = false;
+    committed.release = () => {
+      if (released) return;
+      released = true;
+      try { originalRelease?.(); } finally { grant.release(); }
+    };
+    committed.pacingWaitedMs = totalQueueWaitMs;
+    return committed;
   }
   throw new PacingError('rate_limit_exceeded', 429);
+}
+
+class PacingCandidateChangedError extends Error {
+  constructor() { super('Pacing candidate changed while queued'); }
 }
