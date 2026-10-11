@@ -149,6 +149,18 @@ describe('Pollinations 120s timeout, mock upstream, no network', () => {
     });
   });
 
+  it('times out an SSE stream that sends headers but no first byte for 120s', async () => {
+    process.env.PROVIDER_TIMEOUT_POLLINATIONS = '120000';
+    const provider = new PollinationsProvider();
+    delayedSse(130_000, null);
+    const pending = (async () => {
+      for await (const _frame of provider.streamChatCompletion('fake-key', messages, MODEL)) { /* drain */ }
+    })();
+    const rejected = expect(pending).rejects.toThrow(/first-byte timeout/i);
+    await vi.advanceTimersByTimeAsync(120_001);
+    await rejected;
+  });
+
   it('distinguishes an SSE stall after the first byte from a slow first byte', async () => {
     process.env.PROVIDER_TIMEOUT_POLLINATIONS = '120000';
     const provider = new PollinationsProvider();
