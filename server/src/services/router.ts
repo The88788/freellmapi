@@ -1381,7 +1381,11 @@ function activeChainOrThrow(db: Db): ChainRow[] {
   throw err;
 }
 
-export function resolveRoutingChain(modelString: string | undefined): ResolvedChain {
+// Resolved auto/profile arrays retain their source in a WeakMap, so pacing
+// commits can re-resolve the CURRENT profile after a long queue wait. No
+// source annotation is written to the DB or sent to the client.
+const pacingChainOrigins = new WeakMap<ChainRow[], string>();
+function resolveRoutingChainInternal(modelString: string | undefined): ResolvedChain {
   const db = getDb();
 
   if (!modelString || modelString.toLowerCase() === 'auto') {
@@ -1424,6 +1428,13 @@ export function resolveRoutingChain(modelString: string | undefined): ResolvedCh
   }
 
   return { chain, strategyKey: `auto:${suffix}` };
+}
+
+/** Preserve auto/profile origin without altering existing ResolvedChain wire shape. */
+export function resolveRoutingChain(modelString: string | undefined): ResolvedChain {
+  const result = resolveRoutingChainInternal(modelString);
+  pacingChainOrigins.set(result.chain, modelString ?? 'auto');
+  return result;
 }
 
 // Weights for the in-model key score (#580). Reliability dominates: the point
@@ -2149,8 +2160,13 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
   // slot. Commit must query the CURRENT profile membership, not reuse the
   // one-second cached chain. Named-profile and group callers pass a custom
   // prefetchedChain; refreshing those requires a source-specific resolver.
-  const sourceChain = pacing?.mode === 'commit' && prefetchedChain === undefined
-    ? getActiveChain(db, true)
+  const taggedOrigin = prefetchedChain ? pacingChainOrigins.get(prefetchedChain) : undefined;
+  const sourceChain = pacing?.mode === 'commit'
+    ? (taggedOrigin !== undefined
+      ? (!taggedOrigin || taggedOrigin.toLowerCase() === 'auto'
+        ? getActiveChain(db, true)
+        : resolveRoutingChainInternal(taggedOrigin).chain)
+      : (prefetchedChain ?? getActiveChain(db, true)))
     : (prefetchedChain ?? getActiveChain(db));
   const chain = sourceChain.filter(e => e.enabled);
 
