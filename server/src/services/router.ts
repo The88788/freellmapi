@@ -1680,7 +1680,18 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     if (pacing?.mode !== 'preview') {
       const budget = reserveMonthlyBudget(key.id, estimatedTokens);
       if (!budget.allowed) { note('monthly-budget-cap'); continue; }
-      const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens, Date.now(), pacing?.mode === 'commit');
+      // If lease acquisition itself throws, never strand the already-taken
+      // monthly provisional reservation. This covers all admission modes.
+      let leaseId: number;
+      try {
+        leaseId = acquireLease(
+          entry.platform, entry.model_id, key.id, estimatedTokens,
+          Date.now(), pacing?.mode === 'commit',
+        );
+      } catch (err) {
+        budget.release();
+        throw err;
+      }
       release = () => { releaseLease(leaseId); budget.release(); };
     }
     const chosen: RouteResult = {
