@@ -115,6 +115,32 @@ describe('live dashboard per-provider/model timeout settings', () => {
     expect(mock.mock.calls[2]?.[2]).toBe(120_000);
   });
 
+  it('saving a new timeout while an attempt is pending does not change that attempt', async () => {
+    const provider = new PollinationsProvider();
+    let finishFirst: ((res: Response) => void) | undefined;
+    const makeResponse = () => new Response(JSON.stringify({
+      id: 'test', object: 'chat.completion', created: 1, model: 'muse',
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const mock = vi.spyOn(provider as any, 'fetchWithTimeout')
+      .mockImplementationOnce(() => new Promise<Response>(resolve => {
+        finishFirst = resolve;
+      }))
+      .mockImplementation(async () => makeResponse());
+    const messages = [{ role: 'user' as const, content: 'long agent task' }];
+    saveProviderTimeoutOverride('pollinations', undefined, 120_000);
+    const inFlight = provider.chatCompletion('fake', messages, 'muse');
+    expect(mock.mock.calls[0]?.[2]).toBe(120_000);
+    saveProviderTimeoutOverride('pollinations', undefined, 180_000);
+    // First fetch is STILL waiting; changing the policy did not call abort().
+    expect(mock).toHaveBeenCalledTimes(1);
+    finishFirst?.(makeResponse());
+    await inFlight;
+    await provider.chatCompletion('fake', messages, 'muse');
+    expect(mock.mock.calls[1]?.[2]).toBe(180_000);
+  });
+
   it('per-call timeout from the existing CompletionOptions overrides the dashboard', async () => {
     const provider = new PollinationsProvider();
     const mock = vi.spyOn(provider as any, 'fetchWithTimeout').mockImplementation(
