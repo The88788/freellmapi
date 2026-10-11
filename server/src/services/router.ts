@@ -1272,9 +1272,9 @@ function cachesEnabled(): boolean {
   return process.env.NODE_ENV !== 'test';
 }
 
-function getActiveChain(db: Db): ChainRow[] {
+function getActiveChain(db: Db, forceFresh = false): ChainRow[] {
   const profileId = getActiveProfileId(db);
-  if (cachesEnabled() && chainCache && chainCache.db === db && chainCache.profileId === profileId
+  if (!forceFresh && cachesEnabled() && chainCache && chainCache.db === db && chainCache.profileId === profileId
       && Date.now() - chainCache.at < CHAIN_CACHE_TTL_MS) {
     return chainCache.rows.slice();
   }
@@ -2145,7 +2145,14 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
   const strategy = getRoutingStrategy();
   if (strategy !== 'priority') refreshStatsCache(db);
 
-  const chain = (prefetchedChain ?? getActiveChain(db)).filter(e => e.enabled);
+  // The default/auto chain can change while a request waits for a pacing
+  // slot. Commit must query the CURRENT profile membership, not reuse the
+  // one-second cached chain. Named-profile and group callers pass a custom
+  // prefetchedChain; refreshing those requires a source-specific resolver.
+  const sourceChain = pacing?.mode === 'commit' && prefetchedChain === undefined
+    ? getActiveChain(db, true)
+    : (prefetchedChain ?? getActiveChain(db));
+  const chain = sourceChain.filter(e => e.enabled);
 
   const sortedChain = orderChain(chain, strategy, true, task);
 
