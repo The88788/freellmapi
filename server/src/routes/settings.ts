@@ -27,6 +27,13 @@ import { getHeadroomThresholds, setHeadroomThresholds, getTaskWeightShare, setTa
 import { MCP_ENABLED_SETTING, isMcpServerEnabled } from './mcp.js';
 import { z } from 'zod';
 import { getAppVersion } from '../lib/app-version.js';
+import { getAllProviders } from '../providers/index.js';
+import { OpenAICompatProvider } from '../providers/openai-compat.js';
+import {
+  saveProviderTimeoutOverride,
+  validateTimeoutTarget,
+  validateOperatorTimeout,
+} from '../services/provider-timeout-overrides.js';
 import {
   readProviderPacingConfig,
   saveProviderPacingConfig,
@@ -656,6 +663,94 @@ settingsRouter.put('/provider-pacing', (req: Request, res: Response) => {
     }
     res.status(503).json({ error: {
       code: 'pacing_store_error', message: 'Unable to save provider pacing configuration',
+    } });
+  }
+});
+
+
+// ── Per-provider/per-model timeout editor (uses EXISTING settings table) ──
+// Dashboard auth is inherited from app.ts. Live adapter reads this key at
+// the start of each new upstream attempt. Active requests retain a snapshot.
+// This does not modify the 1 RPM pacing interval or the provider's SSE format.
+const providerTimeoutInputSchema = z.object({
+  platform: z.string(),
+  modelId: z.string().optional(),
+  timeoutMs: z.number().int().nullable(),
+}).strict();
+
+function findTimeoutAdapter(platform: string): OpenAICompatProvider | undefined {
+  const provider = getAllProviders().find(p => p.platform === platform);
+  return provider instanceof OpenAICompatProvider ? provider : undefined;
+}
+
+settingsRouter.get('/provider-timeouts', (req: Request, res: Response) => {
+  try {
+    const platform = typeof req.query.platform === 'string' ? req.query.platform : undefined;
+    const modelId = typeof req.query.modelId === 'string' ? req.query.modelId : undefined;
+    if (platform !== undefined) {
+      validateTimeoutTarget(platform, modelId);
+      const provider = findTimeoutAdapter(platform);
+      if (!provider) {
+        res.status(404).json({ error: {
+          code: 'unsupported_provider_timeout',
+          message: 'This provider does not use the OpenAI-compatible timeout adapter',
+        } });
+        return;
+      }
+      res.json({ provider: provider.getTimeoutStatus(modelId) });
+      return;
+    }
+    // A modelId without a platform is ambiguous. Never silently apply it to
+    // a different provider or leak an unrestricted settings table dump.
+    if (modelId !== undefined) {
+      res.status(400).json({ error: { code: 'invalid_timeout_target' } });
+      return;
+    }
+    res.json({
+      providers: getAllProviders()
+        .filter((p): p is OpenAICompatProvider => p instanceof OpenAICompatProvider)
+        .map(p => ({ name: p.name, ...p.getTimeoutStatus() })),
+    });
+  } catch {
+    res.status(400).json({ error: {
+      code: 'invalid_timeout_target', message: 'Invalid provider or model identifier',
+    } });
+  }
+});
+
+settingsRouter.put('/provider-timeouts', (req: Request, res: Response) => {
+  const parsed = providerTimeoutInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: {
+      code: 'invalid_timeout',
+      message: 'Expected platform, optional modelId, timeoutMs (milliseconds) or null to reset',
+    } });
+    return;
+  }
+  const { platform, modelId, timeoutMs } = parsed.data;
+  try {
+    validateTimeoutTarget(platform, modelId);
+    if (timeoutMs !== null) validateOperatorTimeout(timeoutMs);
+  } catch (err) {
+    res.status(400).json({ error: {
+      code: 'invalid_timeout', message: err instanceof Error ? err.message : 'Invalid timeout',
+    } });
+    return;
+  }
+  const provider = findTimeoutAdapter(platform);
+  if (!provider) {
+    res.status(404).json({ error: {
+      code: 'unsupported_provider_timeout', message: 'Provider does not support live OpenAI timeout overrides',
+    } });
+    return;
+  }
+  try {
+    saveProviderTimeoutOverride(platform, modelId, timeoutMs);
+    res.json({ provider: provider.getTimeoutStatus(modelId) });
+  } catch {
+    res.status(503).json({ error: {
+      code: 'timeout_setting_write_failed',
+      message: 'Could not persist timeout; previous policy remains in force',
     } });
   }
 });
