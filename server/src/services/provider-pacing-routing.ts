@@ -42,6 +42,7 @@ export function providerPacingRuntimeStatus() {
     status: scheduler?.status() ?? { pending: 0, inflight: 0, stopped: true, buckets: [] },
     counters: scheduler?.counters() ?? {
       enqueued: 0, admitted: 0, cancelled: 0, timedOut: 0, overloaded: 0,
+      totalQueueWaitMs: 0, maxQueueWaitMs: 0,
     },
   };
 }
