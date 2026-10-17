@@ -22,6 +22,11 @@ const VERIFIED = [
 
 export function up(db: Db): void {
   const existing = db.prepare("SELECT id FROM models WHERE platform = 'apinex' AND model_id = ? AND endpoint_scope = ''");
+  // During migration round-trips the earlier provenance migration drops and
+  // recreates source. Restore origin for *our exact bootstrap rows* only.
+  const restoreBundledSource = db.prepare(
+    "UPDATE models SET source='user' WHERE platform='apinex' AND model_id=? AND display_name=? AND source='catalog' AND endpoint_scope='' AND context_window IS NULL AND monthly_token_budget=''"
+  );
   const wasDeleted = db.prepare("SELECT 1 FROM catalog_model_tombstones WHERE kind='chat' AND platform='apinex' AND model_id=? AND source='user'");
   const add = db.prepare(`
     INSERT INTO models
@@ -38,7 +43,11 @@ export function up(db: Db): void {
   const profileMaxPriority = db.prepare('SELECT COALESCE(MAX(priority), 0) AS n FROM profile_models WHERE profile_id = ?');
   const addProfile = db.prepare('INSERT OR IGNORE INTO profile_models(profile_id, model_db_id, priority, enabled) VALUES (?, ?, ?, 1)');
   for (const m of VERIFIED) {
-    if (existing.get(m.id) || wasDeleted.get(m.id)) continue; // Respect user edits and explicit deletions.
+    if (wasDeleted.get(m.id)) continue; // Respect explicit deletions.
+    if (existing.get(m.id)) {
+      restoreBundledSource.run(m.id, m.name);
+      continue; // Keep user edits and other metadata intact.
+    }
     add.run(m.id, m.name, m.tools);
     const row = existing.get(m.id) as { id: number } | undefined;
     if (!row) continue;
