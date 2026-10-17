@@ -83,6 +83,26 @@ Reported usage: `prompt_tokens: 380`, `completion_tokens: 13`,
 `total_tokens: 393`, `cost_tokens: 0`; the response also reports
 `reasoning_tokens: 2`. Streamed tool-call deltas are still unverified.
 
+## Live streaming tool-call smoke test (2026-10-17)
+
+Authenticated `POST /v1/chat/completions` on `free/deepseek-v4.1-flash`
+with `stream: true`, one `get_weather` function and
+`tool_choice: "required"` returned streamed `delta.tool_calls` events.
+The initial indexed tool fragment carried
+`id: "call_50320547fa024aeebc009f15"`, `name: "get_weather"`
+and empty arguments; later fragments had `id: ""` and argument
+pieces that concatenate to `{"city": "Almaty"}`. The stream ended
+with `finish_reason: "tool_calls"`, a usage-only chunk, and
+`data: [DONE]`. Usage: 569 prompt tokens, 27 completion tokens,
+596 total tokens, `cost_tokens: 0`, 26 reasoning tokens.
+
+The FreeLLMAPI streaming assembler in `server/src/routes/proxy.ts`
+already treats empty tool-call IDs as absent (`if (tc.id && !acc.id)`),
+accumulates argument fragments by tool-call index, and emits completed calls
+with the original ID. No APInex-specific patch is needed for this observed
+shape. End-to-end verification **through a running FreeLLMAPI instance**
+and other models is still pending.
+
 ## Validation required before upstream PR
 
 1. Obtain an account key in APInex's console; never commit a key.
@@ -92,9 +112,9 @@ Reported usage: `prompt_tokens: 380`, `completion_tokens: 13`,
 3. Check free-balance/check-in semantics and its daily reset via an authenticated
    account/usage endpoint. Avoid consuming free tokens in validation polling.
 4. Non-streaming chat, a non-stream tool-call plus tool-result round trip,
-   and SSE text streaming passed on `free/deepseek-v4.1-flash`. Verify
-   streamed tool-call deltas and vision **per model**. Do not infer all
-   model abilities from gateway-wide API support.
+   SSE text streaming, and streaming tool-call deltas passed on
+   `free/deepseek-v4.1-flash`. Verify through a running FreeLLMAPI proxy,
+   plus vision **per model**; do not infer other models' abilities.
 5. Verify quota errors (429 vs 402), Retry-After, whether inference RPM is shared
    between models, and model multiplier accounting. Confirm wallet is not debited
    for `free/*` calls.
