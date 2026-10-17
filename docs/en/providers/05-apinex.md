@@ -1,4 +1,4 @@
-# APInex gateway (2026-10-17, authenticated catalog probe passed; inference untested)
+# APInex gateway (2026-10-17, authenticated catalog and chat smoke tests passed)
 
 - Website: https://apinex.bond/
 - API base: `https://api.apinex.bond/v1`
@@ -21,8 +21,17 @@ The account's Free dashboard displays **5 RPM**, but on 2026-10-17 at
 `x-ratelimit-remaining: 59`, `x-ratelimit-reset: 1792234119`
 (10:48:39 UTC, 61 seconds later). The `/models` rate-limit bucket is therefore
 60 requests per ~minute; it does **not** prove chat/inference gets 60 RPM.
-Use the conservative dashboard 5 RPM when planning inference until an
-authenticated `POST /v1/chat/completions` confirms the actual inference headers.
+An authenticated non-streaming chat completion at 11:35:12 UTC (based on the
+provider's `created` timestamp 1792236912) confirmed **5 RPM for inference**:
+`x-ratelimit-limit: 5`, `x-ratelimit-remaining: 4`,
+`x-ratelimit-reset: 1792236973` (61 seconds after `created`).
+`free/deepseek-v4.1-flash` answered `OK` with HTTP 200 and `finish_reason: stop`.
+The returned usage was `prompt_tokens: 312`, `completion_tokens: 1`,
+`total_tokens: 313`, `cost_tokens: 0`. `cost_tokens: 0` is an API response
+field, not independent evidence that the user's wallet is unchanged.
+The earlier HTTP 400 (`Expected property name`) came from PowerShell-to-curl
+JSON quoting, not a model/API incompatibility; the successful request used a
+properly JSON-encoded `Invoke-WebRequest` body.
 
 An independent September 5, 2026 test reported a shared 30 RPM counter across
 different free models. Treat that as a historical observation, not today's Free
@@ -39,10 +48,12 @@ per-model contexts remain unknown.
    credentials return 401/403, not 200, before relying on key health verdicts.
 3. Check free-balance/check-in semantics and its daily reset via an authenticated
    account/usage endpoint. Avoid consuming free tokens in validation polling.
-4. Run non-streaming and streaming chat, tool calls, and vision **per model**.
-   Do not infer all model abilities from gateway-wide API support.
-5. Verify quota errors (429 vs 402), Retry-After, shared RPM, and model multiplier
-   accounting. Confirm wallet is not debited for `free/*` calls.
+4. Non-streaming chat passed on `free/deepseek-v4.1-flash`. Verify streaming,
+   tool calls, and vision **per model**. Do not infer all model abilities from
+   gateway-wide API support.
+5. Verify quota errors (429 vs 402), Retry-After, whether inference RPM is shared
+   between models, and model multiplier accounting. Confirm wallet is not debited
+   for `free/*` calls.
 6. Add only live-proven free model IDs to the hosted signed model catalog;
    do not migrate/promote paid models as free.
 7. Run `npm test` and `npm run build` with current Node and dependencies.
