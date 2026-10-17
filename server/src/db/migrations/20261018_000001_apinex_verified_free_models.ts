@@ -22,6 +22,7 @@ const VERIFIED = [
 
 export function up(db: Db): void {
   const existing = db.prepare("SELECT id FROM models WHERE platform = 'apinex' AND model_id = ? AND endpoint_scope = ''");
+  const wasDeleted = db.prepare("SELECT 1 FROM catalog_model_tombstones WHERE kind='chat' AND platform='apinex' AND model_id=? AND source='user'");
   const add = db.prepare(`
     INSERT INTO models
       (platform, model_id, display_name, intelligence_rank, speed_rank,
@@ -37,7 +38,7 @@ export function up(db: Db): void {
   const profileMaxPriority = db.prepare('SELECT COALESCE(MAX(priority), 0) AS n FROM profile_models WHERE profile_id = ?');
   const addProfile = db.prepare('INSERT OR IGNORE INTO profile_models(profile_id, model_db_id, priority, enabled) VALUES (?, ?, ?, 1)');
   for (const m of VERIFIED) {
-    if (existing.get(m.id)) continue; // Never overwrite a user's discovered or edited row.
+    if (existing.get(m.id) || wasDeleted.get(m.id)) continue; // Respect user edits and explicit deletions.
     add.run(m.id, m.name, m.tools);
     const row = existing.get(m.id) as { id: number } | undefined;
     if (!row) continue;
