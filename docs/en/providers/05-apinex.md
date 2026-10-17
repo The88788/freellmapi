@@ -1,4 +1,4 @@
-# APInex gateway (2026-10-17, authenticated catalog and chat smoke tests passed)
+# APInex gateway (2026-10-18, paced free chat bootstrap)
 
 - Website: https://apinex.bond/
 - API base: `https://api.apinex.bond/v1`
@@ -6,6 +6,42 @@
 - Chat: `POST /v1/chat/completions` (OpenAI-compatible)
 - Models: `GET /v1/models` (**authenticated HTTP 200 confirmed 2026-10-17**; omitted authorization returned HTTP 401 `Missing API key`). It returned 43 routes, including 20 `free/*` IDs. A forged *invalid but present* key was not yet tested.
 - Free routes use `free/*` IDs. **Paid IDs charge a separate USD wallet** and should not be auto-enabled.
+
+## Integrated free model roster and rate pacing
+
+This adapter ships with five **live-chat-verified** free models (no manual
+Fetch models click required on a fresh installation):
+
+| OpenAI model ID | Display name | Tool support |
+| --- | --- | --- |
+| `free/deepseek-v4.1-flash` | DeepSeek V4.1 Flash | nonstream/stream tool calling and round-trip tested |
+| `free/gemini-3.8-flash` | Gemini 3.8 Flash | not verified; initially disabled |
+| `free/glm-5.3` | GLM 5.3 | not verified; initially disabled |
+| `free/glm-5.3-flash` | GLM 5.3 Flash | not verified; initially disabled |
+| `free/gpt-6-luna` | GPT-6 Luna | agent tool calls observed, reliability limited by RPM |
+
+The bundled rows are inserted once through a migration, without overwriting
+existing discoveries or user-deleted models. They are backed by the
+OpenAI-compatible gateway and remain free/* only. Additional experimental
+models may be manually fetched and registered, but they are not automatically
+enabled or promoted into the verified roster.
+
+The APInex Free account advertises **5 inference RPM, shared across free models**.
+The provider dispatch gate spaces *starts* of all `POST /chat/completions`
+calls by **12.1 seconds**, including streamed responses, to avoid
+bursting above five starts per rolling minute. A queueing client may wait
+up to many seconds on a busy key; caller abort cancels queue wait. Metadata
+GET /models and validation are not inference requests and are not delayed.
+The generic account-wide rate gate also defaults to 5; an explicit
+`PROVIDER_MINUTE_REQUEST_CAP_APINEX` env setting overrides that numerical gate.
+If a deployment previously set it to 4, remove or change the override to 5.
+A single FreeLLMAPI process is assumed: multiple replicas require a distributed
+gate. Upstream 429/Retry-After and token/day limits remain authoritative.
+
+The user-reported gateway-wide **1M context** is not a measured per-model
+context limit. The bootstrap sets `context_window=NULL` until each model's
+actual advertised capacity is independently confirmed. No RPM/RPD/TPM/TPD
+limits are guessed per model.
 
 ## Recurring allowance and observed rate limits
 
@@ -118,8 +154,7 @@ and other models is still pending.
 5. Verify quota errors (429 vs 402), Retry-After, whether inference RPM is shared
    between models, and model multiplier accounting. Confirm wallet is not debited
    for `free/*` calls.
-6. Add only live-proven free model IDs to the hosted signed model catalog;
-   do not migrate/promote paid models as free.
+6. Five observed free chat IDs are bundled as a conservative bootstrap; additional live-proven free IDs can later be promoted to the hosted signed catalog. Never promote paid models as free.
 7. Run `npm test` and `npm run build` with current Node and dependencies.
 
 Sources:
