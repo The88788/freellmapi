@@ -1019,7 +1019,9 @@ keysRouter.post('/custom/discover-models', async (req: Request, res: Response) =
       for (const row of rows) registeredIds.add(row.model_id);
     }
 
-    const models = discovered.map(m => ({ ...m, registered: registeredIds.has(m.id) }));
+    const models = discovered
+      .filter(m => key.platform !== 'apinex' || m.id.startsWith('free/'))
+      .map(m => ({ ...m, registered: registeredIds.has(m.id) }));
     res.json({
       baseUrl: endpoint.baseUrl,
       keyId: endpoint.keyId,
@@ -1121,6 +1123,10 @@ keysRouter.post('/discovered-models', (req: Request, res: Response) => {
   }
 
   const ids = [...new Set(parsed.data.models)];
+  if (key.platform === 'apinex' && ids.some(id => !id.startsWith('free/'))) {
+    res.status(400).json({ error: { message: 'APInex discovery allows only free/* models to avoid paid-wallet usage' } });
+    return;
+  }
   const nonChat = ids.filter(id => classifyModelId(id) !== undefined);
   const chat = ids.filter(id => classifyModelId(id) === undefined);
   const result = registerDiscoveredModels(db, key.platform, chat.map(modelId => ({ modelId })), { explicit: true });
