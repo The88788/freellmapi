@@ -165,6 +165,10 @@ export type Platform =
   // Requesty — OpenAI-compatible router with no-card free models/credits.
   // Catalog rows live in the Oracle catalog (premium now, free after 30 days).
   | 'requesty'
+  // APInex: OpenAI-compatible gateway, free/* routes share a daily token pool.
+  // Daily grant varies across published pages/promotions; verify live before
+  // attributing a hard limit or enabling paid wallet routes.
+  | 'apinex'
   // NavyAI — OpenAI-compatible unified API. Free plan is 150K tokens/day and
   // 20 RPM; catalog rows live in the Oracle catalog (premium now, free after 30 days).
   | 'navy'
