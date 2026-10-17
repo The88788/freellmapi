@@ -54,8 +54,10 @@ describe('APInex verified bootstrap roster', () => {
   });
   afterEach(() => { getDb().close(); delete process.env.ENCRYPTION_KEY; });
 
-  it('sets one shared 5 RPM provider cap', () => {
-    expect(getProviderMinuteRequestCap('apinex')).toBe(5);
+  it('does not pre-reject requests before the shared 5 RPM pacer', () => {
+    // APInex must WAIT in its upstream pacer, not be rejected by the router
+    // for account-wide RPM before it reaches the queue.
+    expect(getProviderMinuteRequestCap('apinex')).toBeNull();
   });
 
   it('seeds only five free routes and preserves them across reruns', () => {
