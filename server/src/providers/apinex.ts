@@ -24,18 +24,17 @@ export class ApinexPacer {
       const delay = Math.max(0, this.nextStartMs - Date.now());
       if (delay > 0) {
         await new Promise<void>((resolve, reject) => {
-          let timer: ReturnType<typeof setTimeout> | undefined;
+          const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', abort);
+            resolve();
+          }, delay);
           const abort = () => {
-            if (timer !== undefined) clearTimeout(timer);
+            clearTimeout(timer);
             reject(signal?.reason ?? new Error('APInex request aborted'));
           };
           signal?.addEventListener('abort', abort, { once: true });
           // Abort may have raced between the preflight and listener setup.
           if (signal?.aborted) { abort(); return; }
-          timer = setTimeout(() => {
-            signal?.removeEventListener('abort', abort);
-            resolve();
-          }, delay);
         });
       }
       if (signal?.aborted) throw signal.reason ?? new Error('APInex request aborted');
