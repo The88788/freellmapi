@@ -68,6 +68,21 @@ and `cost_tokens: 0`. Inference headers again reported 5 RPM:
 This verifies **streaming text**. Streamed tool-call deltas and the
 tool-result round trip have not been tested yet.
 
+## Live tool-result round-trip test (2026-10-17)
+
+The client replayed the assistant's prior non-stream `get_weather` tool
+call using the same tool-call ID and supplied a `role: "tool"` message
+with `{"city":"Almaty","temperature_c":22}`. An authenticated
+`POST /v1/chat/completions` on `free/deepseek-v4.1-flash` returned
+HTTP 200 with `finish_reason: "stop"` and content
+`The current temperature in Almaty is 22°C.`. This completes the
+**non-streaming tool-call-to-tool-result dialogue cycle**. The weather
+value is synthetic test input, not real-time weather.
+
+Reported usage: `prompt_tokens: 380`, `completion_tokens: 13`,
+`total_tokens: 393`, `cost_tokens: 0`; the response also reports
+`reasoning_tokens: 2`. Streamed tool-call deltas are still unverified.
+
 ## Validation required before upstream PR
 
 1. Obtain an account key in APInex's console; never commit a key.
@@ -76,10 +91,10 @@ tool-result round trip have not been tested yet.
    credentials return 401/403, not 200, before relying on key health verdicts.
 3. Check free-balance/check-in semantics and its daily reset via an authenticated
    account/usage endpoint. Avoid consuming free tokens in validation polling.
-4. Non-streaming chat, one non-stream tool-call turn, and SSE text streaming
-   passed on `free/deepseek-v4.1-flash`. Verify streamed tool calls, full
-   tool-result round trip, and vision **per model**. Do not infer all model
-   abilities from gateway-wide API support.
+4. Non-streaming chat, a non-stream tool-call plus tool-result round trip,
+   and SSE text streaming passed on `free/deepseek-v4.1-flash`. Verify
+   streamed tool-call deltas and vision **per model**. Do not infer all
+   model abilities from gateway-wide API support.
 5. Verify quota errors (429 vs 402), Retry-After, whether inference RPM is shared
    between models, and model multiplier accounting. Confirm wallet is not debited
    for `free/*` calls.
