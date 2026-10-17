@@ -587,8 +587,6 @@ const DEFAULT_PROVIDER_DAILY_TOKEN_CAPS: Record<string, number> = {
 // entirely — so it keeps dispatching and eats real 429s.
 const DEFAULT_PROVIDER_MINUTE_REQUEST_CAPS: Record<string, number> = {
   nvidia: 40,
-  // APInex Free: one 5-RPM inference pool shared by every free/* route.
-  apinex: 5,
 };
 
 export function getProviderDailyRequestCap(platform: string): number | null {
