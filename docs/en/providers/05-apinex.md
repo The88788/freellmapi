@@ -52,6 +52,22 @@ reported `x-ratelimit-limit: 5`, `x-ratelimit-remaining: 4`, and usage
 reasoning tokens. This confirms a **single non-stream tool-call turn only**.
 Streamed tool calls and a full function-result round trip remain untested.
 
+## Live SSE streaming smoke test (2026-10-17)
+
+Authenticated `POST /v1/chat/completions` with `stream: true` on
+`free/deepseek-v4.1-flash` returned HTTP 200 and
+`Content-Type: text/event-stream; charset=utf-8`. Incremental
+`chat.completion.chunk` SSE deltas formed `1, 2, 3, 4, 5`, followed by
+`finish_reason: "stop"`, a final usage-only chunk (`choices: []`), and
+`data: [DONE]`. The final usage reported 320 prompt tokens,
+13 completion tokens (9 categorized as reasoning tokens), 333 total tokens,
+and `cost_tokens: 0`. Inference headers again reported 5 RPM:
+`x-ratelimit-limit: 5`, `x-ratelimit-remaining: 4`,
+`x-ratelimit-reset: 1792238436`.
+
+This verifies **streaming text**. Streamed tool-call deltas and the
+tool-result round trip have not been tested yet.
+
 ## Validation required before upstream PR
 
 1. Obtain an account key in APInex's console; never commit a key.
@@ -60,10 +76,10 @@ Streamed tool calls and a full function-result round trip remain untested.
    credentials return 401/403, not 200, before relying on key health verdicts.
 3. Check free-balance/check-in semantics and its daily reset via an authenticated
    account/usage endpoint. Avoid consuming free tokens in validation polling.
-4. Non-streaming chat and a single non-stream tool-call turn passed on
-   `free/deepseek-v4.1-flash`. Verify SSE streaming, streamed tool calls,
-   a full tool-result round trip and vision **per model**. Do not infer all
-   model abilities from gateway-wide API support.
+4. Non-streaming chat, one non-stream tool-call turn, and SSE text streaming
+   passed on `free/deepseek-v4.1-flash`. Verify streamed tool calls, full
+   tool-result round trip, and vision **per model**. Do not infer all model
+   abilities from gateway-wide API support.
 5. Verify quota errors (429 vs 402), Retry-After, whether inference RPM is shared
    between models, and model multiplier accounting. Confirm wallet is not debited
    for `free/*` calls.
