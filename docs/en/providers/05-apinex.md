@@ -3,7 +3,7 @@
 - Website: https://apinex.bond/
 - API base: `https://api.apinex.bond/v1`
 - Auth: `Authorization: Bearer <key>` (a working account key used `sk-apx` prefix without requiring a trailing hyphen; never log key values)
-- Chat: `POST /v1/chat/completions` (OpenAI-compatible)
+- Chat: `POST /v1/chat/completions` (OpenAI-compatible; local paid-route guard and shared pacing)
 - Models: `GET /v1/models` (**authenticated HTTP 200 confirmed 2026-10-17**; omitted authorization returned HTTP 401 `Missing API key`). It returned 43 routes, including 20 `free/*` IDs. A forged *invalid but present* key was not yet tested.
 - Free routes use `free/*` IDs. **Paid IDs charge a separate USD wallet** and should not be auto-enabled.
 
@@ -102,6 +102,35 @@ accumulates argument fragments by tool-call index, and emits completed calls
 with the original ID. No APInex-specific patch is needed for this observed
 shape. End-to-end verification **through a running FreeLLMAPI instance**
 and other models is still pending.
+
+## Built-in free catalog and inference scheduling (2026-10-18)
+
+The bundled baseline contains five short-chat-verified free routes:
+`free/deepseek-v4.1-flash`, `free/gemini-3.8-flash`, `free/glm-5.3`,
+`free/glm-5.3-flash`, and `free/gpt-6-luna`. Readable display names
+are bundled, so new users do **not** need to use Fetch models. The context
+window is provisionally 1,000,000 tokens **as claimed by the provider**;
+it has not been verified by a max-context load test.
+
+The custom APInex adapter permits ONLY `free/*` model IDs. Non-free
+IDs fail locally with HTTP 403, preventing accidental paid-wallet requests.
+All inference requests, including streaming and non-streaming across different
+free models, use ONE shared start-time gate with a 12,500 ms interval
+(corresponding to the account-wide advertised 5 RPM with jitter margin).
+This intentionally queues instead of immediately returning 429 on short bursts,
+and queued work respects request cancellation. It does not increase the
+provider's rate limit or cover traffic sent outside this FreeLLMAPI process.
+
+Unverified APInex models already present in local databases are disabled
+by the migration, not deleted. The five known free IDs are enabled. Tool
+support is true for DeepSeek V4.1 Flash (confirmed streamed and non-streamed
+tool cycles) and GPT-6 Luna (reported observed tool invocation in DSH);
+other tool/vision flags are conservative until independently verified.
+Published RPD, TPM, TPD remain unknown and are left unset.
+
+The built-in migration is a local free-roster baseline; hosted signed catalog
+rules can override model listings when APInex is added there by maintainers.
+This integration has no official APInex quota/balance endpoint integration.
 
 ## Validation required before upstream PR
 
