@@ -26,20 +26,7 @@ OpenAI-compatible gateway and remain free/* only. Additional experimental
 models may be manually fetched and registered, but they are not automatically
 enabled or promoted into the verified roster.
 
-The APInex Free account advertises **5 inference RPM, shared across free models**.
-The provider dispatch gate spaces *starts* of all `POST /chat/completions`
-calls by **12.1 seconds**, including streamed responses, to avoid
-bursting above five starts per rolling minute. A queueing client may wait
-up to many seconds on a busy key; caller abort cancels queue wait. Metadata
-GET /models and validation are not inference requests and are not delayed.
-The queue is responsible for pacing, so the generic pre-dispatch RPM gate is
-not enabled by default for APInex: pre-rejecting the sixth tool-followup would
-bypass the queue. Administrators who set
-`PROVIDER_MINUTE_REQUEST_CAP_APINEX` explicitly should remove it to enable
-waiting rather than early rejection. A previous override of 4 or 5 can
-still pre-reject before the queue and is not recommended with this adapter.
-A single FreeLLMAPI process is assumed: multiple replicas require a distributed
-gate. Upstream 429/Retry-After and token/day limits remain authoritative.
+APInex Free advertises **5 inference requests per rolling minute per account**, shared across all free/* models. The existing FreeLLMAPI account/key-level `getProviderMinuteRequestCap` and `canUseProviderMinute` gates enforce that ceiling, including in-flight leases. A request after the allowance is spent is skipped by routing and may fail over to another eligible provider; the server **does not queue or delay it**. No APInex-specific queue is installed. This avoids diverging from the project's standard quota tracking and cooldown behavior. Administrators can override the default with `PROVIDER_MINUTE_REQUEST_CAP_APINEX` (0 disables the cap). For users of an older local 4 RPM environment override, removing that override restores the new 5 RPM default.
 
 The user-reported gateway-wide **1M context** is not a measured per-model
 context limit. The bootstrap sets `context_window=NULL` until each model's
