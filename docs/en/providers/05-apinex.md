@@ -40,6 +40,18 @@ tier grant. The quota collector records headers dynamically and does not hardcod
 but remains unverified from the authenticated account. Published RPD, TPM, and
 per-model contexts remain unknown.
 
+## Live tool-calling smoke test (2026-10-17)
+
+Authenticated `POST /v1/chat/completions` on `free/deepseek-v4.1-flash`
+with one `get_weather` function and `tool_choice: "required"` returned
+HTTP 200. The model emitted `finish_reason: "tool_calls"` and one structured
+`get_weather` call with JSON arguments `{"city": "Almaty"}`. The response
+reported `x-ratelimit-limit: 5`, `x-ratelimit-remaining: 4`, and usage
+`prompt_tokens: 569`, `completion_tokens: 27`, `total_tokens: 596`,
+`cost_tokens: 0`; 26 of the 27 completion tokens were categorized as
+reasoning tokens. This confirms a **single non-stream tool-call turn only**.
+Streamed tool calls and a full function-result round trip remain untested.
+
 ## Validation required before upstream PR
 
 1. Obtain an account key in APInex's console; never commit a key.
@@ -48,9 +60,10 @@ per-model contexts remain unknown.
    credentials return 401/403, not 200, before relying on key health verdicts.
 3. Check free-balance/check-in semantics and its daily reset via an authenticated
    account/usage endpoint. Avoid consuming free tokens in validation polling.
-4. Non-streaming chat passed on `free/deepseek-v4.1-flash`. Verify streaming,
-   tool calls, and vision **per model**. Do not infer all model abilities from
-   gateway-wide API support.
+4. Non-streaming chat and a single non-stream tool-call turn passed on
+   `free/deepseek-v4.1-flash`. Verify SSE streaming, streamed tool calls,
+   a full tool-result round trip and vision **per model**. Do not infer all
+   model abilities from gateway-wide API support.
 5. Verify quota errors (429 vs 402), Retry-After, whether inference RPM is shared
    between models, and model multiplier accounting. Confirm wallet is not debited
    for `free/*` calls.
