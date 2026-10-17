@@ -32,9 +32,12 @@ calls by **12.1 seconds**, including streamed responses, to avoid
 bursting above five starts per rolling minute. A queueing client may wait
 up to many seconds on a busy key; caller abort cancels queue wait. Metadata
 GET /models and validation are not inference requests and are not delayed.
-The generic account-wide rate gate also defaults to 5; an explicit
-`PROVIDER_MINUTE_REQUEST_CAP_APINEX` env setting overrides that numerical gate.
-If a deployment previously set it to 4, remove or change the override to 5.
+The queue is responsible for pacing, so the generic pre-dispatch RPM gate is
+not enabled by default for APInex: pre-rejecting the sixth tool-followup would
+bypass the queue. Administrators who set
+`PROVIDER_MINUTE_REQUEST_CAP_APINEX` explicitly should remove it to enable
+waiting rather than early rejection. A previous override of 4 or 5 can
+still pre-reject before the queue and is not recommended with this adapter.
 A single FreeLLMAPI process is assumed: multiple replicas require a distributed
 gate. Upstream 429/Retry-After and token/day limits remain authoritative.
 
