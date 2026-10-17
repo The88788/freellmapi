@@ -15,9 +15,9 @@ Fetch models click required on a fresh installation):
 | OpenAI model ID | Display name | Tool support |
 | --- | --- | --- |
 | `free/deepseek-v4.1-flash` | DeepSeek V4.1 Flash | nonstream/stream tool calling and round-trip tested |
-| `free/gemini-3.8-flash` | Gemini 3.8 Flash | not verified; initially disabled |
-| `free/glm-5.3` | GLM 5.3 | not verified; initially disabled |
-| `free/glm-5.3-flash` | GLM 5.3 Flash | not verified; initially disabled |
+| `free/gemini-3.8-flash` | Gemini 3.8 Flash | not verified; Tools flag off |
+| `free/glm-5.3` | GLM 5.3 | not verified; Tools flag off |
+| `free/glm-5.3-flash` | GLM 5.3 Flash | not verified; Tools flag off |
 | `free/gpt-6-luna` | GPT-6 Luna | agent tool calls observed, reliability limited by RPM |
 
 The bundled rows are inserted once through a migration, without overwriting
