@@ -49,9 +49,12 @@ export function up(db: Db): void {
       addProfile.run(profile.id, row.id, pmax.n + 1);
     }
   }
+  db.prepare("INSERT INTO settings(key,value) VALUES('apinex_verified_roster_seed_v1','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
 }
 
-export function down(_db: Db): void {
-  // Keep models and user edits after downgrade. Removing them would orphan
-  // existing profiles and custom agent sessions.
+export function down(db: Db): void {
+  // Model rows are intentionally persistent across downgrades: dropping them
+  // would destroy user edits or orphan profiles. The marker is reversible and
+  // records which code version bootstrapped the roster.
+  db.prepare("DELETE FROM settings WHERE key='apinex_verified_roster_seed_v1'").run();
 }
