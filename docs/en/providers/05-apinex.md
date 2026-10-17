@@ -1,10 +1,10 @@
-# APInex gateway (2026-10-17, pending authenticated smoke test)
+# APInex gateway (2026-10-17, authenticated catalog probe passed; inference untested)
 
 - Website: https://apinex.bond/
 - API base: `https://api.apinex.bond/v1`
-- Auth: `Authorization: Bearer sk-apx-...`
+- Auth: `Authorization: Bearer <key>` (a working account key used `sk-apx` prefix without requiring a trailing hyphen; never log key values)
 - Chat: `POST /v1/chat/completions` (OpenAI-compatible)
-- Models: `GET /v1/models` (published, **authenticated key validation is NOT yet proven**)
+- Models: `GET /v1/models` (**authenticated HTTP 200 confirmed 2026-10-17**; omitted authorization returned HTTP 401 `Missing API key`). It returned 43 routes, including 20 `free/*` IDs. A forged *invalid but present* key was not yet tested.
 - Free routes use `free/*` IDs. **Paid IDs charge a separate USD wallet** and should not be auto-enabled.
 
 ## Recurring allowance and observed rate limits
@@ -16,19 +16,27 @@ codes are promotional, not guaranteed baseline renewals. Some free models
 consume 2x/3x of the shared free-token allowance. Therefore the integration
 does **not** seed per-model quota numbers or hard-code a daily cap.
 
-An independent September 5, 2026 test observed a *shared* 30 RPM counter across
-different free models using `x-ratelimit-limit`, `x-ratelimit-remaining`, and
-`x-ratelimit-reset`. The quota collector records actual header values when
-present; 30 RPM is **not** a hardcoded limit. Daily reset at 00:00 UTC was
-reported independently but remains unverified via authenticated API response.
-Published RPD, TPM, and per-model contexts are unknown.
+The account's Free dashboard displays **5 RPM**, but on 2026-10-17 at
+10:47:38 UTC authenticated `GET /v1/models` returned `x-ratelimit-limit: 60`,
+`x-ratelimit-remaining: 59`, `x-ratelimit-reset: 1792234119`
+(10:48:39 UTC, 61 seconds later). The `/models` rate-limit bucket is therefore
+60 requests per ~minute; it does **not** prove chat/inference gets 60 RPM.
+Use the conservative dashboard 5 RPM when planning inference until an
+authenticated `POST /v1/chat/completions` confirms the actual inference headers.
+
+An independent September 5, 2026 test reported a shared 30 RPM counter across
+different free models. Treat that as a historical observation, not today's Free
+tier grant. The quota collector records headers dynamically and does not hardcode
+60, 30 or 5 RPM. Daily token quota reset at 00:00 UTC was reported independently
+but remains unverified from the authenticated account. Published RPD, TPM, and
+per-model contexts remain unknown.
 
 ## Validation required before upstream PR
 
 1. Obtain an account key in APInex's console; never commit a key.
-2. Verify that invalid or missing auth to `GET /v1/models` actually returns
-   401/403. If it returns 200 publicly, use a **read-only authenticated endpoint**
-   for `validateUrl` before enabling unattended health checks.
+2. Missing Authorization to `GET /v1/models` returned HTTP 401; authenticated
+   read-only catalog request returned HTTP 200. Confirm explicitly invalid
+   credentials return 401/403, not 200, before relying on key health verdicts.
 3. Check free-balance/check-in semantics and its daily reset via an authenticated
    account/usage endpoint. Avoid consuming free tokens in validation polling.
 4. Run non-streaming and streaming chat, tool calls, and vision **per model**.
