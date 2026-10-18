@@ -1,4 +1,4 @@
-# APInex gateway (2026-10-18, paced free chat bootstrap)
+# APInex gateway (2026-10-18, provider integration and catalog handoff)
 
 - Website: https://apinex.bond/
 - API base: `https://api.apinex.bond/v1`
@@ -7,10 +7,9 @@
 - Models: `GET /v1/models` (**authenticated HTTP 200 confirmed 2026-10-17**; omitted authorization returned HTTP 401 `Missing API key`). It returned 43 routes, including 20 `free/*` IDs. A forged *invalid but present* key was not yet tested.
 - Free routes use `free/*` IDs. **Paid IDs charge a separate USD wallet** and should not be auto-enabled.
 
-## Integrated free model roster and rate pacing
+## Candidate verified free models for the signed catalog
 
-This adapter ships with five **live-chat-verified** free models (no manual
-Fetch models click required on a fresh installation):
+The integration has five **chat-smoke-tested** free model IDs proposed for the **separately published, signed hosted model catalog**. They are **not bundled or auto-added** by this provider PR; until catalog maintainers publish them, users can manually register them through Fetch models:
 
 | OpenAI model ID | Display name | Tool support |
 | --- | --- | --- |
@@ -20,16 +19,12 @@ Fetch models click required on a fresh installation):
 | `free/glm-5.3-flash` | GLM 5.3 Flash | not verified; Tools flag off |
 | `free/gpt-6-luna` | GPT-6 Luna | agent tool calls observed, reliability limited by RPM |
 
-The bundled rows are inserted once through a migration, without overwriting
-existing discoveries or user-deleted models. They are backed by the
-OpenAI-compatible gateway and remain free/* only. Additional experimental
-models may be manually fetched and registered, but they are not automatically
-enabled or promoted into the verified roster.
+This provider PR intentionally contains **no local model-seeding migration**, matching FreeLLMAPI's existing catalog ownership rules. The signed catalog must be updated by its maintainers before new installations show these IDs automatically. Publishing catalog rows requires verifying metadata and preserving user disable/tombstone behavior. Models discovered manually are not automatically promoted into the signed catalog.
 
-APInex Free advertises **5 inference requests per rolling minute per account**, shared across all free/* models. The existing FreeLLMAPI account/key-level `getProviderMinuteRequestCap` and `canUseProviderMinute` gates enforce that ceiling, including in-flight leases. A request after the allowance is spent is skipped by routing and may fail over to another eligible provider; the server **does not queue or delay it**. No APInex-specific queue is installed. This avoids diverging from the project's standard quota tracking and cooldown behavior. Administrators can override the default with `PROVIDER_MINUTE_REQUEST_CAP_APINEX` (0 disables the cap). For users of an older local 4 RPM environment override, removing that override restores the new 5 RPM default.
+APInex Free advertises **5 inference requests per rolling minute per account**, shared across all free/* models. The existing FreeLLMAPI account/key-level `getProviderMinuteRequestCap` and `canUseProviderMinute` gates enforce that ceiling, including in-flight leases. A request after the allowance is spent is skipped by routing and may fail over to another eligible provider; the server **does not queue or delay it**. No APInex-specific queue is installed. This avoids diverging from the project's standard quota tracking and cooldown behavior. Administrators can override the default with `PROVIDER_MINUTE_REQUEST_CAP_APINEX` (0 disables the cap). A manually configured environment override takes precedence over the default.
 
 The user-reported gateway-wide **1M context** is not a measured per-model
-context limit. The bootstrap sets `context_window=NULL` until each model's
+context limit. The proposed catalog entries should set `contextWindow: null` until each model's
 actual advertised capacity is independently confirmed. No RPM/RPD/TPM/TPD
 limits are guessed per model.
 
@@ -144,7 +139,7 @@ and other models is still pending.
 5. Verify quota errors (429 vs 402), Retry-After, whether inference RPM is shared
    between models, and model multiplier accounting. Confirm wallet is not debited
    for `free/*` calls.
-6. Five observed free chat IDs are bundled as a conservative bootstrap; additional live-proven free IDs can later be promoted to the hosted signed catalog. Never promote paid models as free.
+6. Request a separate signed catalog publication for the five smoke-tested free chat IDs. Without that publication, new users must Fetch models or add a model manually. Never promote paid models as free.
 7. Run `npm test` and `npm run build` with current Node and dependencies.
 
 Sources:
