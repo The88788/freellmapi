@@ -181,6 +181,8 @@ export type Platform =
   // Requesty — OpenAI-compatible router with no-card free models/credits.
   // Catalog rows live in the Oracle catalog (premium now, free after 30 days).
   | 'requesty'
+  // APInex: OpenAI-compatible account key, free/* token pool.
+  | 'apinex'
   // NavyAI — OpenAI-compatible unified API. Free plan is 150K tokens/day and
   // 20 RPM; catalog rows live in the Oracle catalog (premium now, free after 30 days).
   | 'navy'
