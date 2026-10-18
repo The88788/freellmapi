@@ -38,7 +38,6 @@ import * as keyMonthlyUsage from '../migrations/20260914_000001_key_monthly_usag
 import * as quotaSnapshotFreshness from '../migrations/20260915_000001_quota_snapshot_freshness.js';
 import * as requestModelAttribution from '../migrations/20260913_000001_request_model_attribution.js';
 import * as customEndpointGroupLabel from '../migrations/20260930_000001_custom_endpoint_group_label.js';
-import * as apinexVerifiedFreeModels from '../migrations/20261018_000001_apinex_verified_free_models.js';
 
 export interface MigrationModule {
   up(db: Db): void;
@@ -90,8 +89,6 @@ export const CUSTOM_ENDPOINT_GROUP_LABEL_FILENAME = '20260930_000001_custom_endp
 export const KEY_MONTHLY_USAGE_FILENAME = '20260914_000001_key_monthly_usage.ts';
 export const QUOTA_SNAPSHOT_FRESHNESS_FILENAME = '20260915_000001_quota_snapshot_freshness.ts';
 
-export const APINEX_VERIFIED_FREE_MODELS_FILENAME = '20261018_000001_apinex_verified_free_models.ts';
-
 export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: LEGACY_BASELINE_FILENAME, module: legacyBaseline },
   { filename: CUSTOM_PROVIDER_MODALITIES_FILENAME, module: customProviderModalities },
@@ -132,5 +129,4 @@ export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: KEY_MONTHLY_USAGE_FILENAME, module: keyMonthlyUsage },
   { filename: QUOTA_SNAPSHOT_FRESHNESS_FILENAME, module: quotaSnapshotFreshness },
   { filename: CUSTOM_ENDPOINT_GROUP_LABEL_FILENAME, module: customEndpointGroupLabel },
-  { filename: APINEX_VERIFIED_FREE_MODELS_FILENAME, module: apinexVerifiedFreeModels },
 ];
