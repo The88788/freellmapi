@@ -160,6 +160,7 @@ export function inferPoolForPlatform(platform: Platform, modelId?: string | null
   if (platform === 'ainative') return 'ainative::account';
   if (platform === 'aion') return 'aion::free';
   if (platform === 'requesty') return 'requesty::free';
+  if (platform === 'apinex') return normalizedModelId.startsWith('free/') ? 'apinex::free' : 'apinex::paid';
   if (platform === 'navy') return 'navy::free';
   if (platform === 'nara') return 'nara::free';
   if (platform === 'sealion') return 'sealion::free';
@@ -183,6 +184,7 @@ export function inferPoolForPlatform(platform: Platform, modelId?: string | null
 }
 
 function isSharedPool(platform: Platform): boolean {
+  if (platform === 'apinex') return true;
   if (platform === 'aclide') return true;
   if (platform === 'speka') return true;
   if (platform === 'auray') return true;
@@ -195,6 +197,7 @@ function isSharedPool(platform: Platform): boolean {
 type HeaderSpec = { metric: QuotaMetric; limit: string; remaining?: string; reset?: string; strategy?: QuotaResetStrategy };
 
 const HEADER_SPECS: Partial<Record<Platform, HeaderSpec[]>> = {
+  apinex: [{ metric: 'requests', limit: 'x-ratelimit-limit', remaining: 'x-ratelimit-remaining', reset: 'x-ratelimit-reset', strategy: 'provider_reported' }],
   // Observe upstream limits without inventing per-model budgets. CLōD's
   // rate window is distinct from its daily grant; Speechify bills characters,
   // not tokens, and does not publish token headers.
