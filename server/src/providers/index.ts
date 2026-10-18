@@ -448,6 +448,15 @@ register(new OpenAICompatProvider({
   baseUrl: 'https://router.requesty.ai/v1',
 }));
 
+// APInex — OpenAI-compatible chat gateway. 5 inference RPM per API key,
+// shared across all free/* model IDs; paid route quotas are not verified.
+// Model metadata is managed by the signed hosted catalog, not local migrations.
+register(new OpenAICompatProvider({
+  platform: 'apinex',
+  name: 'APInex',
+  baseUrl: 'https://api.apinex.bond/v1',
+}));
+
 // NavyAI — OpenAI-compatible unified API (api.navy/v1). Free key from the
 // Discord-backed dashboard; the free plan is 150K tokens/day and 20 RPM.
 // Live smoke tests required an explicit User-Agent header.
