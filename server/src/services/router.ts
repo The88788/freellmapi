@@ -1,4 +1,5 @@
 import { getDb, getSetting, setSetting } from '../db/index.js';
+import { isCloudflareAccountDailyBlocked } from './cloudflare-daily-quota.js';
 import { getProvider, hasProvider, resolveProvider } from '../providers/index.js';
 import { decrypt } from '../lib/crypto.js';
 import { decryptProxyUrl } from '../lib/key-proxy.js';
@@ -1686,6 +1687,8 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       continue;
     }
 
+    if (entry.platform === 'cloudflare' && isCloudflareAccountDailyBlocked(decryptedKey)) { note('cooldown'); continue; }
+
     const resolvedProvider = entry.platform === 'custom'
       ? resolveProvider('custom', key.base_url)
       : provider;
@@ -1772,6 +1775,11 @@ export function hasOtherUsableKey(modelDbId: number, excludingKeyId: number, ski
     if (skipKeys?.has(`${m.platform}:${m.model_id}:${k.id}`)) continue;
     if (isOnCooldown(m.platform, m.model_id, k.id)) continue;
     if (!canUseProvider(m.platform, k.id)) continue;
+    if (m.platform === 'cloudflare') {
+      const row = db.prepare('SELECT encrypted_key, iv, auth_tag FROM api_keys WHERE id = ?').get(k.id) as { encrypted_key: string; iv: string; auth_tag: string };
+      try { if (isCloudflareAccountDailyBlocked(cachedDecrypt(k.id, row.encrypted_key, row.iv, row.auth_tag))) continue; }
+      catch { continue; }
+    }
     if (!canUseProviderMinute(m.platform, k.id)) continue;
     if (!canMakeRequest(m.platform, m.model_id, k.id, limits)) continue;
     // A per-minute token spike on the failed key doesn't mean a fresh key lacks
