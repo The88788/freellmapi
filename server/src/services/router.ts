@@ -1757,8 +1757,8 @@ export function hasOtherUsableKey(modelDbId: number, excludingKeyId: number, ski
 
   const limits = { rpm: m.rpm_limit, rpd: m.rpd_limit, tpm: m.tpm_limit, tpd: m.tpd_limit };
   const keys = db.prepare(
-    "SELECT id, model_scope_json FROM api_keys WHERE platform = ? AND enabled = 1 AND status IN ('healthy', 'unknown')"
-  ).all(m.platform) as { id: number; model_scope_json: string | null }[];
+    "SELECT id, model_scope_json, encrypted_key, iv, auth_tag FROM api_keys WHERE platform = ? AND enabled = 1 AND status IN ('healthy', 'unknown')"
+  ).all(m.platform) as { id: number; model_scope_json: string | null; encrypted_key: string; iv: string; auth_tag: string }[];
 
   // Keys of the model's own custom endpoint (#212, #619); a key belonging to a
   // DIFFERENT endpoint cannot serve it, so it doesn't count as an alternative.
@@ -1776,8 +1776,7 @@ export function hasOtherUsableKey(modelDbId: number, excludingKeyId: number, ski
     if (isOnCooldown(m.platform, m.model_id, k.id)) continue;
     if (!canUseProvider(m.platform, k.id)) continue;
     if (m.platform === 'cloudflare') {
-      const row = db.prepare('SELECT encrypted_key, iv, auth_tag FROM api_keys WHERE id = ?').get(k.id) as { encrypted_key: string; iv: string; auth_tag: string };
-      try { if (isCloudflareAccountDailyBlocked(cachedDecrypt(k.id, row.encrypted_key, row.iv, row.auth_tag))) continue; }
+      try { if (isCloudflareAccountDailyBlocked(cachedDecrypt(k.id, k.encrypted_key, k.iv, k.auth_tag))) continue; }
       catch { continue; }
     }
     if (!canUseProviderMinute(m.platform, k.id)) continue;
