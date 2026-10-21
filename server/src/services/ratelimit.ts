@@ -1366,6 +1366,38 @@ export function clearCooldownsForKey(keyId: number): number {
 }
 
 /**
+ * Remove only APINex daily website-check-in cooldowns for a key.
+ * The existing all-sources clear remains available to operators; this scoped
+ * recovery must not lift credit, tier, or provider-confirmed rate limits.
+ * Read the persisted source before touching in-memory state, so an unknown
+ * source is never cleared optimistically when the database is unavailable.
+ */
+export function clearApinexCheckinCooldownsForKey(keyId: number): number {
+  if (!Number.isInteger(keyId)) return 0;
+
+  const removed = withDb(db => db.transaction(() => {
+    const rows = db.prepare(`
+      SELECT model_id FROM rate_limit_cooldowns
+       WHERE platform = 'apinex' AND key_id = ? AND source = 'checkin'
+    `).all(keyId) as { model_id: string }[];
+
+    const result = db.prepare(`
+      DELETE FROM rate_limit_cooldowns
+       WHERE platform = 'apinex' AND key_id = ? AND source = 'checkin'
+    `).run(keyId);
+    return { modelIds: rows.map(row => row.model_id), count: Number(result.changes ?? 0) };
+  })());
+
+  if (!removed) return 0;
+  for (const modelId of removed.modelIds) {
+    const key = `apinex:${modelId}:${keyId}`;
+    cooldowns.delete(`${key}:cooldown`);
+    cooldownHits.delete(key);
+  }
+  return removed.count;
+}
+
+/**
  * Drop EVERY cooldown (all keys, all models), the escalation-ladder counters
  * and the null-limits hit windows — the "my whole pool is stuck" escape hatch
  * (#952). Returns how many active benches were lifted. Penalties and the
