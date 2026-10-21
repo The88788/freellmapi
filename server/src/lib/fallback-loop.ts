@@ -997,7 +997,6 @@ export function exhaustedRetryError(lastError: any, maxRetries?: number, ctx?: E
       attempts.length > 0 && attempts.every(a => a.platform === 'apinex' && a.errorClass === 'out_of_credits')) {
     return {
       kind: 'rate_limit', status: 429, type: 'rate_limit_error', code: 'provider_checkin_required',
-      ...(getSoonestCooldownExpiry() != null ? { retryAtMs: getSoonestCooldownExpiry()! } : {}),
       message: `${APINEX_CHECKIN_MESSAGE}${budgetNote}${trail}`,
     };
   }
@@ -1188,7 +1187,6 @@ export function routingExhaustionBody(routeErr: any): ExhaustionBody {
   )) {
     return {
       kind: 'rate_limit', status: 429, type: 'rate_limit_error', code: 'provider_checkin_required',
-      ...(getSoonestCooldownExpiry() != null ? { retryAtMs: getSoonestCooldownExpiry()! } : {}),
       message: APINEX_CHECKIN_MESSAGE,
     };
   }
