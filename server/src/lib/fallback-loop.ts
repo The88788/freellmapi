@@ -315,7 +315,7 @@ export function cooldownForError(route: RouteResult, err: any): number {
  */
 export const APINEX_CHECKIN_URL = 'https://apinex.bond/';
 export const APINEX_CHECKIN_MESSAGE =
-  'APINex Free requires a daily website visit. Open https://apinex.bond/ and sign in to claim the daily check-in. ' +
+  `APINex Free requires a daily website visit. Open ${APINEX_CHECKIN_URL} and sign in to claim the daily check-in. ` +
   'FreeLLMAPI will retry after a short cooldown, or you can resume the APINex key in the Keys dashboard after visiting.';
 
 /** HTTP 402 on APINex Free can mean a missing website check-in, not empty credits. */
@@ -997,6 +997,7 @@ export function exhaustedRetryError(lastError: any, maxRetries?: number, ctx?: E
       attempts.length > 0 && attempts.every(a => a.platform === 'apinex' && a.errorClass === 'out_of_credits')) {
     return {
       kind: 'rate_limit', status: 429, type: 'rate_limit_error', code: 'provider_checkin_required',
+      ...(getSoonestCooldownExpiry() != null ? { retryAtMs: getSoonestCooldownExpiry()! } : {}),
       message: `${APINEX_CHECKIN_MESSAGE}${budgetNote}${trail}`,
     };
   }
@@ -1187,6 +1188,7 @@ export function routingExhaustionBody(routeErr: any): ExhaustionBody {
   )) {
     return {
       kind: 'rate_limit', status: 429, type: 'rate_limit_error', code: 'provider_checkin_required',
+      ...(getSoonestCooldownExpiry() != null ? { retryAtMs: getSoonestCooldownExpiry()! } : {}),
       message: APINEX_CHECKIN_MESSAGE,
     };
   }
