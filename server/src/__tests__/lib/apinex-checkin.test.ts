@@ -14,8 +14,8 @@ const checkin = Object.assign(
 const generic402 = Object.assign(new Error('APINex API error 402: Insufficient credits'), { status: 402 });
 const route = (platform = 'apinex'): RouteResult => ({
   provider: {} as any, platform, modelId: 'free/gemini-3.8-flash',
-  modelDbId: 760100, keyId: 760100, apiKey: 'test',
-  displayName: 'Test', rpdLimit: null, tpdLimit: null,
+  modelDbId: 760100, keyId: 760100, apiKey: 'test', keyLabel: null,
+  displayName: 'Test', contextWindow: null, endpointScope: '', rpdLimit: null, tpdLimit: null,
 });
 
 beforeAll(() => {
