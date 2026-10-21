@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { initDb } from '../../db/index.js';
 import {
-  isApinexCheckinRequired, cooldownDecisionForError,
+  isApinexCheckinRequired, cooldownDecisionForError, recordRetryableFailure, newFallbackState,
   exhaustedRetryError, routingExhaustionBody,
 } from '../../lib/fallback-loop.js';
 import { setCooldown, getCooldownSource, clearCooldownsForKey } from '../../services/ratelimit.js';
-import type { RouteResult } from '../../services/router.js';
+import { getAllPenalties, type RouteResult } from '../../services/router.js';
 
 const checkin = Object.assign(
   new Error('APINex API error 402: Daily check-in required to use free models.'),
@@ -40,6 +40,12 @@ describe('APINex daily website check-in recovery', () => {
     expect(getCooldownSource('apinex', route().modelId, route().keyId)).toBe('checkin');
     clearCooldownsForKey(route().keyId);
     expect(getCooldownSource('apinex', route().modelId, route().keyId)).toBeNull();
+  });
+
+  it('does not demote the model for an account-level website visit requirement', () => {
+    recordRetryableFailure(route(), checkin, newFallbackState());
+    expect(getAllPenalties().find(p => p.modelDbId === route().modelDbId)).toBeUndefined();
+    clearCooldownsForKey(route().keyId);
   });
 
   it('provides an actionable OpenAI error after an APINex-only rejected attempt', () => {
