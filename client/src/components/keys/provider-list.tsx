@@ -155,9 +155,9 @@ export function ProviderList({ onAddKey }: { onAddKey: () => void }) {
   })
 
   // Operator-controlled recovery after APINex daily website visit.
-  // The server clears both its persisted and in-memory cooldowns for this key.
+  // Only APINex check-in cooldowns are cleared; actual quotas remain enforced.
   const resumeCheckinKey = useMutation({
-    mutationFn: (keyId: number) => apiFetch<{ cleared: number }>(`/api/keys/${keyId}/cooldowns`, { method: 'DELETE' }),
+    mutationFn: (keyId: number) => apiFetch<{ cleared: number }>(`/api/keys/${keyId}/cooldowns/checkin`, { method: 'DELETE' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['keys'] })
       queryClient.invalidateQueries({ queryKey: ['health'] })
