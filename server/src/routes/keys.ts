@@ -490,6 +490,7 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       modelDiscovery: canDiscover(row.platform),
       cooldowns: cooldowns.map(c => ({
         modelId: c.modelId,
+        source: c.source,
         expiresAtMs: c.expiresAtMs,
         remainingMs: c.remainingMs,
       })),

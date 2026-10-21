@@ -69,6 +69,17 @@ describe('Key cooldown visibility and clearing', () => {
     expect(key.status).not.toBe('cooling');
   });
 
+  it('surfaces APINex check-in cooldown provenance without marking the key unhealthy', async () => {
+    const id = await createKey(app, 'apinex', 'api-test-key-value123456');
+    setCooldown('apinex', 'free/gemini-3.8-flash', id, 15 * 60_000, 'checkin');
+    const { status, body } = await request(app, 'GET', '/api/keys');
+    const key = body.find((k: any) => k.id === id);
+    expect(status).toBe(200);
+    expect(key.cooldowns).toEqual([expect.objectContaining({
+      modelId: 'free/gemini-3.8-flash', source: 'checkin',
+    })]);
+  });
+
   it('DELETE /api/keys/:id/cooldowns clears them and reports the count', async () => {
     const id = await createKey(app, 'groq', 'gsk_testkeyvalue123456');
     setCooldown('groq', 'llama-3.3-70b', id, 60 * 60_000);
