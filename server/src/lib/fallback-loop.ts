@@ -612,7 +612,10 @@ export function recordRetryableFailure(route: RouteResult, err: any, state: Fall
   // enabled it still steers the key via the cooldown above, but leaves the
   // model's books (failure window, penalties) untouched — so one slow minute
   // stops sinking a healthy model out of routing.
-  const providerMoment = isProviderMomentAttributionEnabled() && isProviderMomentFailure(err);
+  // APINex check-in is a key/account eligibility gate, not a sick model.
+  // Do not sink model reliability or rank merely because nobody visited the site.
+  const providerMoment = isApinexCheckinRequired(route.platform, err) ||
+    (isProviderMomentAttributionEnabled() && isProviderMomentFailure(err));
   if (!providerMoment) {
     // Model-level failure benching: a model failing across keys (or repeatedly
     // on one key) must sink out of routing instead of being re-picked every
